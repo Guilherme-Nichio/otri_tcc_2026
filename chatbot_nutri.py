@@ -155,6 +155,26 @@ async def atualizar_cliente(id_cliente: str, campos: Dict[str, Any]) -> bool:
         print(f"Erro ao atualizar cliente: {e}")
         return False
 
+async def atualizar_status_cliente(id_cliente: str, ativo: bool) -> bool:
+    try:
+        await supabase.table("clientes").update({"ativo": ativo}).eq("id_cliente", id_cliente).execute()
+        return True
+    except Exception as e:
+        print(f"Erro ao atualizar status do cliente: {e}")
+        return False
+
+async def atualizar_detalhes_cliente(id_cliente: str, anamnese: Dict[str, Any], ia_persona: str, ia_restricoes: str) -> bool:
+    try:
+        await supabase.table("clientes").update({
+            "anamnese": anamnese,
+            "ia_persona": ia_persona,
+            "ia_restricoes": ia_restricoes
+        }).eq("id_cliente", id_cliente).execute()
+        return True
+    except Exception as e:
+        print(f"Erro ao atualizar detalhes do cliente: {e}")
+        return False
+
 async def get_cliente_por_id(id_cliente: str) -> Optional[Dict[str, Any]]:
     try:
         res = await supabase.table("clientes").select("*").eq("id_cliente", id_cliente).execute()
@@ -165,7 +185,7 @@ async def get_cliente_por_id(id_cliente: str) -> Optional[Dict[str, Any]]:
 
 async def get_cliente_perfil(id_cliente: str) -> Optional[Dict[str, Any]]:
     try:
-        res = await supabase.table("clientes").select("id_cliente, nome, email, idade, sexo, peso_kg, altura_cm, meta, nutricionistas(id_nutri, nome, email)").eq("id_cliente", id_cliente).execute()
+        res = await supabase.table("clientes").select("id_cliente, nome, email, idade, sexo, peso_kg, altura_cm, meta, ativo, anamnese, ia_persona, ia_restricoes, nutricionistas(id_nutri, nome, email)").eq("id_cliente", id_cliente).execute()
         
         if not res.data:
             return None
@@ -226,7 +246,7 @@ async def delete_cliente(id_cliente: str) -> bool:
 
 async def listar_clientes_por_nutri(id_nutri: str) -> List[Dict[str, Any]]:
     try:
-        res = await supabase.table("clientes").select("id_cliente, nome, email, peso_kg, altura_cm, meta").eq("id_nutri", id_nutri).execute()
+        res = await supabase.table("clientes").select("id_cliente, nome, email, peso_kg, altura_cm, meta, ativo").eq("id_nutri", id_nutri).execute()
         return res.data
     except Exception as e:
         print(e)
@@ -234,13 +254,16 @@ async def listar_clientes_por_nutri(id_nutri: str) -> List[Dict[str, Any]]:
 
 async def login_cliente(email: str, senha: str) -> Optional[Dict[str, Any]]:
     try:
-        res = await supabase.table("clientes").select("id_cliente, nome, senha, nutricionistas(id_nutri, nome)").eq("email", email).execute()
+        res = await supabase.table("clientes").select("id_cliente, nome, senha, ativo, nutricionistas(id_nutri, nome)").eq("email", email).execute()
         if not res.data:
             return None
         
         cliente_data = res.data[0]
         if cliente_data.get("senha") != senha:
             return None
+            
+        if cliente_data.get("ativo") is False:
+            raise PermissionError("Acesso bloqueado pela nutricionista.")
             
         nutri_info = cliente_data.pop("nutricionistas", {})
         if isinstance(nutri_info, list) and len(nutri_info) > 0:
@@ -529,6 +552,22 @@ async def get_historico_conversa(id_cliente: str) -> List[Dict[str, Any]]:
         return res.data
     except Exception:
         return []
+
+async def get_monitoramento_cliente(id_cliente: str) -> Dict[str, Any]:
+    try:
+        conv_res = await supabase.table("conversas").select("time").eq("id_cliente", id_cliente).order("time", desc=True).limit(1).execute()
+        reg_res = await supabase.table("registros_consumo").select("data_hora").eq("id_cliente", id_cliente).order("data_hora", desc=True).limit(1).execute()
+        
+        ultima_mensagem = conv_res.data[0]["time"] if conv_res.data else None
+        ultimo_registro = reg_res.data[0]["data_hora"] if reg_res.data else None
+        
+        return {
+            "ultima_mensagem": ultima_mensagem,
+            "ultimo_registro": ultimo_registro
+        }
+    except Exception as e:
+        print(f"Erro ao obter monitoramento: {e}")
+        return {"ultima_mensagem": None, "ultimo_registro": None}
 
 async def saudacoes_cliente(id_cliente: str) -> str:
     cliente = await get_cliente_por_id(id_cliente)
@@ -831,6 +870,13 @@ async def responder_pergunta(id_cliente: str, texto: str) -> str:
         if config:
             persona = config.get("bot_persona") or persona
             restricoes = config.get("bot_restricoes") or restricoes
+            
+    # Sobrepor as restrições individuais do paciente, se houver
+    if cliente and cliente.get("ia_persona"):
+        persona = cliente.get("ia_persona")
+    
+    if cliente and cliente.get("ia_restricoes"):
+        restricoes = restricoes + "\n\nRESTRIÇÕES ESPECÍFICAS DESTE PACIENTE:\n" + cliente.get("ia_restricoes")
 
     gemini_key = os.environ.get("GEMINI_API_KEY")
     if not gemini_key:

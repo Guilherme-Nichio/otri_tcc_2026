@@ -49,6 +49,14 @@ class NutriPerfilRequest(BaseModel):
     email: str
     senha: Optional[str] = None
 
+class ClienteStatusRequest(BaseModel):
+    ativo: bool
+
+class ClienteDetalhesRequest(BaseModel):
+    anamnese: Dict[str, Any] = {}
+    ia_persona: str = ""
+    ia_restricoes: str = ""
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("Iniciando API...")
@@ -113,6 +121,24 @@ async def delete_cliente(id_cliente: str):
     if not sucesso:
         raise HTTPException(status_code=500, detail="Erro ao deletar cliente do banco de dados.")
     return {"status": "sucesso", "deleted_id": id_cliente}
+
+@api_router.put("/clientes/{id_cliente}/status")
+async def put_status_cliente(id_cliente: str, request: ClienteStatusRequest):
+    sucesso = await bot.atualizar_status_cliente(id_cliente, request.ativo)
+    if not sucesso:
+        raise HTTPException(status_code=500, detail="Erro ao atualizar status.")
+    return {"status": "sucesso"}
+
+@api_router.put("/clientes/{id_cliente}/detalhes")
+async def put_detalhes_cliente(id_cliente: str, request: ClienteDetalhesRequest):
+    sucesso = await bot.atualizar_detalhes_cliente(id_cliente, request.anamnese, request.ia_persona, request.ia_restricoes)
+    if not sucesso:
+        raise HTTPException(status_code=500, detail="Erro ao atualizar detalhes (anamnese/IA).")
+    return {"status": "sucesso"}
+
+@api_router.get("/clientes/{id_cliente}/monitoramento")
+async def get_monitoramento(id_cliente: str):
+    return await bot.get_monitoramento_cliente(id_cliente)
 
 @api_router.get("/planos/{id_cliente}")
 async def get_plano_cliente(id_cliente: str):

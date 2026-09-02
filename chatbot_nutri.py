@@ -1,4 +1,3 @@
-
 import os
 import json
 import re
@@ -9,7 +8,9 @@ import uuid
 from unidecode import unidecode
 from datetime import datetime, date
 from typing import List, Dict, Any, Optional, Tuple
-import sqlite3 
+from supabase import create_async_client, AsyncClient
+import google.generativeai as genai
+
 try:
     from sentence_transformers import SentenceTransformer, util
 except Exception as e:
@@ -21,7 +22,7 @@ MODELO_IA = None
 DF_ALIMENTOS = None
 INTENCOES_EMBED = {}
 
-ARQUIVO_BANCO = "nutri.db" 
+supabase: Optional[AsyncClient] = None
 
 FATORES_ATIVIDADE = {
     "sedentario": 1.2,
@@ -46,21 +47,21 @@ def carregar_modelos():
 
     print("Carregando base de alimentos...")
     try:
-        DF_ALIMENTOS = pd.read_csv("base-comidas-tratada.xlsx - basona.csv")
+        if os.path.exists("base-comidas-tratada.xlsx - basona.csv"):
+            DF_ALIMENTOS = pd.read_csv("base-comidas-tratada.xlsx - basona.csv")
+        elif os.path.exists("base-comidas-tratada.xlsx"):
+            DF_ALIMENTOS = pd.read_excel("base-comidas-tratada.xlsx", sheet_name="basona")
+        else:
+            raise FileNotFoundError("Nenhuma base de dados (CSV ou Excel) foi encontrada na pasta.")
+            
         if "descricao_alimento" not in DF_ALIMENTOS.columns:
-            raise ValueError("Coluna 'descricao_alimento' não encontrada no CSV.")
+            raise ValueError("Coluna 'descricao_alimento' não encontrada na base de dados.")
             
         DF_ALIMENTOS["descricao_alimento_norm"] = DF_ALIMENTOS["descricao_alimento"].astype(str).str.lower().str.strip().apply(lambda x: unidecode(x))
         print(f"Base de alimentos carregada: {len(DF_ALIMENTOS)} itens.")
     except Exception as e:
-        print(f"Erro ao carregar 'base-comidas-tratada.xlsx - basona.csv': {e}")
-        try:
-            DF_ALIMENTOS = pd.read_excel("base-comidas-tratada.xlsx", sheet_name="basona")
-            DF_ALIMENTOS["descricao_alimento_norm"] = DF_ALIMENTOS["descricao_alimento"].astype(str).str.lower().str.strip().apply(lambda x: unidecode(x))
-            print(f"Base de alimentos (Excel) carregada: {len(DF_ALIMENTOS)} itens.")
-        except Exception as e_xlsx:
-            print(f"Erro fatal ao carregar base de alimentos: {e_xlsx}")
-            DF_ALIMENTOS = pd.DataFrame(columns=["descricao_alimento", "descricao_alimento_norm", "energia_kcal", "proteina_g", "carboidrato_g", "lipideo_g"])
+        print(f"Erro fatal ao carregar base de alimentos: {e}")
+        DF_ALIMENTOS = pd.DataFrame(columns=["descricao_alimento", "descricao_alimento_norm", "energia_kcal", "proteina_g", "carboidrato_g", "lipideo_g"])
 
     print("Carregando intenções...")
     CAMINHO_INTENCOES = "intencoes.json"
@@ -75,191 +76,131 @@ def carregar_modelos():
         INTENCOES_EXEMPLO = {}
         INTENCOES_EMBED = {}
 
-def get_db():
-    db = sqlite3.connect(ARQUIVO_BANCO, check_same_thread=False)
-    db.row_factory = sqlite3.Row 
-    return db
-
-def init_db():
-    schema = """
-    CREATE TABLE IF NOT EXISTS nutricionistas (
-        id_nutri TEXT PRIMARY KEY,
-        nome TEXT NOT NULL,
-        email TEXT UNIQUE NOT NULL,
-        senha TEXT NOT NULL,
-        criado_em TEXT NOT NULL,
-        bot_persona TEXT,
-        bot_restricoes TEXT,
-        bot_cor TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS clientes (
-        id_cliente TEXT PRIMARY KEY,
-        id_nutri TEXT NOT NULL,
-        nome TEXT NOT NULL,
-        email TEXT UNIQUE NOT NULL,
-        senha TEXT NOT NULL,
-        idade INTEGER,
-        sexo TEXT,
-        peso_kg REAL,
-        altura_cm REAL,
-        atividade TEXT,
-        peso_inicial REAL,
-        meta TEXT,
-        agua_meta_ml INTEGER,
-        criado_em TEXT NOT NULL,
-        FOREIGN KEY (id_nutri) REFERENCES nutricionistas (id_nutri)
-    );
-
-    CREATE TABLE IF NOT EXISTS planos (
-        id_plano INTEGER PRIMARY KEY AUTOINCREMENT,
-        id_cliente TEXT NOT NULL,
-        refeicao TEXT NOT NULL,
-        id_item TEXT NOT NULL,
-        nome TEXT NOT NULL,
-        cal_100g REAL DEFAULT 0,
-        prot_100g REAL DEFAULT 0,
-        carb_100g REAL DEFAULT 0,
-        fat_100g REAL DEFAULT 0,
-        embedding_texto TEXT,
-        embedding_vec BLOB,
-        UNIQUE(id_cliente, refeicao, nome)
-    );
-
-    CREATE TABLE IF NOT EXISTS conversas (
-        id_conversa INTEGER PRIMARY KEY AUTOINCREMENT,
-        id_cliente TEXT NOT NULL,
-        role TEXT NOT NULL,
-        texto TEXT NOT NULL,
-        time TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS registros_consumo (
-        id_registro INTEGER PRIMARY KEY AUTOINCREMENT,
-        id_cliente TEXT NOT NULL,
-        data_hora TEXT NOT NULL,
-        refeicao TEXT,
-        nome_item TEXT,
-        gramas REAL,
-        kcal REAL
-    );
-    """
-    with get_db() as db:
-        db.executescript(schema)
+async def init_db():
+    global supabase
+    url = os.environ.get("SUPABASE_URL", "")
+    key = os.environ.get("SUPABASE_KEY", "")
     
-    try:
-        with get_db() as db:
-            cursor = db.execute("SELECT id_nutri FROM nutricionistas LIMIT 1")
-            if cursor.fetchone() is None:
-                print("Banco de dados vazio. Criando dados de teste...")
-                id_nutri_teste = 'nutri-teste-01'
-                db.execute(
-                    "INSERT OR IGNORE INTO nutricionistas (id_nutri, nome, email, senha, criado_em, bot_persona, bot_restricoes, bot_cor) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (id_nutri_teste, 'Dra. Ana Silva', 'nutri@teste.com', '123', datetime.utcnow().isoformat(), 'Uma assistente amigável e motivadora.', 'Nunca dar diagnósticos.', '#3498db')
-                )
-                
-                id_cliente_teste = 'cliente-teste-01'
-                db.execute(
-                    """INSERT OR IGNORE INTO clientes (id_cliente, id_nutri, nome, email, senha, idade, sexo, peso_kg, altura_cm, atividade, peso_inicial, criado_em, meta)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (id_cliente_teste, id_nutri_teste, 'Carlos Mendes', 'cliente@teste.com', '123', 30, 'M', 85.0, 175.0, 'sedentario', 85.0, datetime.utcnow().isoformat(), 'Perder peso')
-                )
-                print("Nutricionista (nutri@teste.com) e Cliente (cliente@teste.com) de teste criados. Senha para ambos: 123")
-            
-            else:
-                print("Banco de dados já populado.")
-                
-    except Exception as e:
-        print(f"Erro ao criar dados de teste: {e}")
-    
-    print("Banco de dados SQLite inicializado.")
+    if url and key:
+        supabase = await create_async_client(url, key)
+        print("Supabase client initialized.")
+    else:
+        print("AVISO: Variáveis de ambiente SUPABASE_URL e SUPABASE_KEY não configuradas.")
+        
+    gemini_key = os.environ.get("GEMINI_API_KEY", "")
+    if gemini_key:
+        genai.configure(api_key=gemini_key)
+        print("Gemini configurado com sucesso.")
+    else:
+        print("AVISO: GEMINI_API_KEY não configurada. Respostas serão baseadas no cálculo apenas.")
 
 def gerar_id() -> str:
-    return str(uuid.uuid4())[:8]
+    return str(uuid.uuid4())
 
 def normalizar_texto(txt: str) -> str:
     if not isinstance(txt, str):
         return ""
     return re.sub(r'\s+', ' ', txt.strip().lower())
 
-def criar_nutricionista(nome: str, email: str, senha: str) -> str:
+async def criar_nutricionista(nome: str, email: str, senha: str) -> str:
     idn = gerar_id()
     try:
-        with get_db() as db:
-            db.execute(
-                "INSERT INTO nutricionistas (id_nutri, nome, email, senha, criado_em) VALUES (?, ?, ?, ?, ?)",
-                (idn, nome, email, senha, datetime.utcnow().isoformat())
-            )
+        data = {
+            "id_nutri": idn,
+            "nome": nome,
+            "email": email,
+            "senha": senha,
+            "criado_em": datetime.utcnow().isoformat()
+        }
+        await supabase.table("nutricionistas").insert(data).execute()
         return idn
-    except sqlite3.IntegrityError:
+    except Exception as e:
+        print(f"Erro ao criar nutricionista: {e}")
         return None 
 
-def criar_cliente(id_nutri: str, nome: str, email: str, senha: str, idade: int, sexo: str, peso_kg: float, altura_cm: float, atividade: str="sedentario") -> str:
+async def criar_cliente(id_nutri: str, nome: str, email: str, senha: str, idade: int, sexo: str, peso_kg: float, altura_cm: float, atividade: str="sedentario") -> str:
     idc = gerar_id()
     try:
-        with get_db() as db:
-            db.execute(
-                """INSERT INTO clientes (id_cliente, id_nutri, nome, email, senha, idade, sexo, peso_kg, altura_cm, atividade, peso_inicial, criado_em)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (idc, id_nutri, nome, email, senha, int(idade), sexo, float(peso_kg), float(altura_cm), atividade, float(peso_kg), datetime.utcnow().isoformat())
-            )
+        data = {
+            "id_cliente": idc,
+            "id_nutri": id_nutri,
+            "nome": nome,
+            "email": email,
+            "senha": senha,
+            "idade": int(idade),
+            "sexo": sexo,
+            "peso_kg": float(peso_kg),
+            "altura_cm": float(altura_cm),
+            "atividade": atividade,
+            "peso_inicial": float(peso_kg),
+            "criado_em": datetime.utcnow().isoformat()
+        }
+        await supabase.table("clientes").insert(data).execute()
         return idc
-    except sqlite3.IntegrityError:
-        return None 
     except Exception as e:
         print(f"Erro ao criar cliente: {e}")
         return None
 
-def atualizar_cliente(id_cliente: str, campos: Dict[str, Any]) -> bool:
+async def atualizar_cliente(id_cliente: str, campos: Dict[str, Any]) -> bool:
     campos_permitidos = {"nome", "idade", "sexo", "peso_kg", "altura_cm", "atividade", "meta", "agua_meta_ml"}
+    dados_atualizar = {k: v for k, v in campos.items() if k in campos_permitidos}
     
-    set_clause = []
-    valores = []
-    
-    for campo, valor in campos.items():
-        if campo in campos_permitidos:
-            set_clause.append(f"{campo} = ?")
-            valores.append(valor)
-    
-    if not set_clause:
+    if not dados_atualizar:
         return False 
         
-    valores.append(id_cliente)
-    query = f"UPDATE clientes SET {', '.join(set_clause)} WHERE id_cliente = ?"
-    
     try:
-        with get_db() as db:
-            db.execute(query, tuple(valores))
+        await supabase.table("clientes").update(dados_atualizar).eq("id_cliente", id_cliente).execute()
         return True
     except Exception as e:
         print(f"Erro ao atualizar cliente: {e}")
         return False
 
-def get_cliente_por_id(id_cliente: str) -> Optional[Dict[str, Any]]:
-    with get_db() as db:
-        cursor = db.execute("SELECT * FROM clientes WHERE id_cliente = ?", (id_cliente,))
-        cliente = cursor.fetchone()
-        return dict(cliente) if cliente else None
+async def atualizar_status_cliente(id_cliente: str, ativo: bool) -> bool:
+    try:
+        await supabase.table("clientes").update({"ativo": ativo}).eq("id_cliente", id_cliente).execute()
+        return True
+    except Exception as e:
+        print(f"Erro ao atualizar status do cliente: {e}")
+        return False
 
-def get_cliente_perfil(id_cliente: str) -> Optional[Dict[str, Any]]:
-    with get_db() as db:
-        query = """
-            SELECT 
-                c.id_cliente, c.nome, c.email, c.idade, c.sexo, c.peso_kg, c.altura_cm, c.meta,
-                n.nome as nome_nutri,
-                n.email as email_nutri,
-                n.id_nutri
-            FROM clientes c
-            JOIN nutricionistas n ON c.id_nutri = n.id_nutri
-            WHERE c.id_cliente = ?
-        """
-        cursor = db.execute(query, (id_cliente,))
-        perfil = cursor.fetchone()
+async def atualizar_detalhes_cliente(id_cliente: str, anamnese: Dict[str, Any], ia_persona: str, ia_restricoes: str) -> bool:
+    try:
+        await supabase.table("clientes").update({
+            "anamnese": anamnese,
+            "ia_persona": ia_persona,
+            "ia_restricoes": ia_restricoes
+        }).eq("id_cliente", id_cliente).execute()
+        return True
+    except Exception as e:
+        print(f"Erro ao atualizar detalhes do cliente: {e}")
+        return False
+
+async def get_cliente_por_id(id_cliente: str) -> Optional[Dict[str, Any]]:
+    try:
+        res = await supabase.table("clientes").select("*").eq("id_cliente", id_cliente).execute()
+        return res.data[0] if res.data else None
+    except Exception as e:
+        print(f"Erro ao obter cliente: {e}")
+        return None
+
+async def get_cliente_perfil(id_cliente: str) -> Optional[Dict[str, Any]]:
+    try:
+        res = await supabase.table("clientes").select("id_cliente, nome, email, idade, sexo, peso_kg, altura_cm, meta, ativo, anamnese, ia_persona, ia_restricoes, nutricionistas(id_nutri, nome, email)").eq("id_cliente", id_cliente).execute()
         
-        if not perfil:
+        if not res.data:
             return None
             
-        perfil_dict = dict(perfil)
+        cliente = res.data[0]
+        nutri_info = cliente.pop("nutricionistas", {})
+        if isinstance(nutri_info, list) and len(nutri_info) > 0:
+            nutri_info = nutri_info[0]
+        elif nutri_info is None:
+            nutri_info = {}
+
+        perfil_dict = dict(cliente)
+        perfil_dict["nome_nutri"] = nutri_info.get("nome")
+        perfil_dict["email_nutri"] = nutri_info.get("email")
+        perfil_dict["id_nutri"] = nutri_info.get("id_nutri")
         
         if perfil_dict.get("peso_kg") and perfil_dict.get("altura_cm"):
             perfil_dict["imc"] = calcular_imc(perfil_dict["peso_kg"], perfil_dict["altura_cm"])
@@ -269,94 +210,104 @@ def get_cliente_perfil(id_cliente: str) -> Optional[Dict[str, Any]]:
             perfil_dict["imc_class"] = "Dados insuficientes"
             
         return perfil_dict
+    except Exception as e:
+        print(f"Erro ao obter perfil cliente: {e}")
+        return None
 
-def get_nutri_perfil(id_nutri: str) -> Optional[Dict[str, Any]]:
-    with get_db() as db:
-        cursor = db.execute("SELECT id_nutri, nome, email FROM nutricionistas WHERE id_nutri = ?", (id_nutri,))
-        nutri = cursor.fetchone()
-        return dict(nutri) if nutri else None
-
-def update_nutri_perfil(id_nutri: str, nome: str, email: str, senha: Optional[str] = None) -> bool:
+async def get_nutri_perfil(id_nutri: str) -> Optional[Dict[str, Any]]:
     try:
-        with get_db() as db:
-            if senha:
-                db.execute(
-                    "UPDATE nutricionistas SET nome = ?, email = ?, senha = ? WHERE id_nutri = ?",
-                    (nome, email, senha, id_nutri)
-                )
-            else:
-                db.execute(
-                    "UPDATE nutricionistas SET nome = ?, email = ? WHERE id_nutri = ?",
-                    (nome, email, id_nutri)
-                )
+        res = await supabase.table("nutricionistas").select("id_nutri, nome, email").eq("id_nutri", id_nutri).execute()
+        return res.data[0] if res.data else None
+    except Exception as e:
+        return None
+
+async def update_nutri_perfil(id_nutri: str, nome: str, email: str, senha: Optional[str] = None) -> bool:
+    try:
+        dados = {"nome": nome, "email": email}
+        if senha:
+            dados["senha"] = senha
+            
+        await supabase.table("nutricionistas").update(dados).eq("id_nutri", id_nutri).execute()
         return True
-    except sqlite3.IntegrityError:
-        print(f"Erro: Email '{email}' já está em uso por outra conta.")
-        return False
     except Exception as e:
         print(f"Erro ao atualizar perfil da nutri: {e}")
         return False
 
-def delete_cliente(id_cliente: str) -> bool:
+async def delete_cliente(id_cliente: str) -> bool:
     try:
-        with get_db() as db:
-            db.execute("BEGIN TRANSACTION")
-            db.execute("DELETE FROM clientes WHERE id_cliente = ?", (id_cliente,))
-            db.execute("DELETE FROM planos WHERE id_cliente = ?", (id_cliente,))
-            db.execute("DELETE FROM conversas WHERE id_cliente = ?", (id_cliente,))
-            db.execute("DELETE FROM registros_consumo WHERE id_cliente = ?", (id_cliente,))
-            db.execute("COMMIT")
+        await supabase.table("conversas").delete().eq("id_cliente", id_cliente).execute()
+        await supabase.table("planos").delete().eq("id_cliente", id_cliente).execute()
+        await supabase.table("registros_consumo").delete().eq("id_cliente", id_cliente).execute()
+        await supabase.table("clientes").delete().eq("id_cliente", id_cliente).execute()
         return True
     except Exception as e:
         print(f"Erro ao deletar cliente: {e}")
-        with get_db() as db:
-            db.execute("ROLLBACK") 
         return False
 
-def listar_clientes_por_nutri(id_nutri: str) -> List[Dict[str, Any]]:
-    with get_db() as db:
-        cursor = db.execute("SELECT id_cliente, nome, email, peso_kg, altura_cm, meta FROM clientes WHERE id_nutri = ?", (id_nutri,))
-        clientes = cursor.fetchall()
-        return [dict(c) for c in clientes]
-
-def login_cliente(email: str, senha: str) -> Optional[Dict[str, Any]]:
-    with get_db() as db:
-        query = """
-            SELECT 
-                c.id_cliente, c.nome, n.nome as nome_nutri, n.id_nutri
-            FROM clientes c
-            JOIN nutricionistas n ON c.id_nutri = n.id_nutri
-            WHERE c.email = ? AND c.senha = ?
-        """
-        cursor = db.execute(query, (email, senha))
-        cliente = cursor.fetchone()
-        return dict(cliente) if cliente else None
-
-def login_nutri(email: str, senha: str) -> Optional[Dict[str, Any]]:
-    with get_db() as db:
-        cursor = db.execute("SELECT * FROM nutricionistas WHERE email = ? AND senha = ?", (email, senha))
-        nutri = cursor.fetchone()
-        return dict(nutri) if nutri else None
-
-def get_bot_config(id_nutri: str) -> Optional[Dict[str, Any]]:
-    with get_db() as db:
-        cursor = db.execute("SELECT bot_persona, bot_restricoes, bot_cor FROM nutricionistas WHERE id_nutri = ?", (id_nutri,))
-        config = cursor.fetchone()
-        return dict(config) if config else None
-
-def update_bot_config(id_nutri: str, persona: str, restricoes: str, cor: str) -> bool:
+async def listar_clientes_por_nutri(id_nutri: str) -> List[Dict[str, Any]]:
     try:
-        with get_db() as db:
-            db.execute(
-                "UPDATE nutricionistas SET bot_persona = ?, bot_restricoes = ?, bot_cor = ? WHERE id_nutri = ?",
-                (persona, restricoes, cor, id_nutri)
-            )
+        res = await supabase.table("clientes").select("id_cliente, nome, email, peso_kg, altura_cm, meta, ativo").eq("id_nutri", id_nutri).execute()
+        return res.data
+    except Exception as e:
+        print(e)
+        return []
+
+async def login_cliente(email: str, senha: str) -> Optional[Dict[str, Any]]:
+    try:
+        res = await supabase.table("clientes").select("id_cliente, nome, senha, ativo, nutricionistas(id_nutri, nome)").eq("email", email).execute()
+        if not res.data:
+            return None
+        
+        cliente_data = res.data[0]
+        if cliente_data.get("senha") != senha:
+            return None
+            
+        if cliente_data.get("ativo") is False:
+            raise PermissionError("Acesso bloqueado pela nutricionista.")
+            
+        nutri_info = cliente_data.pop("nutricionistas", {})
+        if isinstance(nutri_info, list) and len(nutri_info) > 0:
+            nutri_info = nutri_info[0]
+        elif nutri_info is None:
+            nutri_info = {}
+            
+        return {
+            "id_cliente": cliente_data["id_cliente"],
+            "nome": cliente_data["nome"],
+            "nome_nutri": nutri_info.get("nome"),
+            "id_nutri": nutri_info.get("id_nutri")
+        }
+    except Exception as e:
+        print(e)
+        return None
+
+async def login_nutri(email: str, senha: str) -> Optional[Dict[str, Any]]:
+    try:
+        res = await supabase.table("nutricionistas").select("*").eq("email", email).eq("senha", senha).execute()
+        return res.data[0] if res.data else None
+    except Exception as e:
+        return None
+
+async def get_bot_config(id_nutri: str) -> Optional[Dict[str, Any]]:
+    try:
+        res = await supabase.table("nutricionistas").select("bot_persona, bot_restricoes, bot_cor").eq("id_nutri", id_nutri).execute()
+        return res.data[0] if res.data else None
+    except Exception as e:
+        return None
+
+async def update_bot_config(id_nutri: str, persona: str, restricoes: str, cor: str) -> bool:
+    try:
+        await supabase.table("nutricionistas").update({
+            "bot_persona": persona,
+            "bot_restricoes": restricoes,
+            "bot_cor": cor
+        }).eq("id_nutri", id_nutri).execute()
         return True
     except Exception as e:
         print(f"Erro ao salvar config do bot: {e}")
         return False
 
-def adicionar_opcao_plano(id_cliente: str, refeicao: str, nome_alimento: str,
+async def adicionar_opcao_plano(id_cliente: str, refeicao: str, nome_alimento: str,
                           cal_100g: float, prot_100g: float=0.0, carb_100g: float=0.0, fat_100g: float=0.0) -> bool:
     if MODELO_IA is None:
         print("Modelo de IA não carregado. Não é possível adicionar embedding.")
@@ -366,36 +317,41 @@ def adicionar_opcao_plano(id_cliente: str, refeicao: str, nome_alimento: str,
     id_item = gerar_id()
     
     texto_repr = f"{nome_alimento} - {cal_100g:.0f} kcal por 100g"
-    embedding_vec_blob = None
+    embedding_vec_list = None
     try:
         emb = MODELO_IA.encode(texto_repr, convert_to_tensor=True)
-        embedding_vec_blob = emb.cpu().detach().numpy().tobytes()
+        embedding_vec_list = emb.cpu().detach().numpy().tolist()
     except Exception as e:
         print(f"[AVISO] falha ao gerar embedding para '{nome_alimento}': {e}")
 
     try:
-        with get_db() as db:
-            db.execute(
-                """INSERT INTO planos (id_cliente, refeicao, id_item, nome, cal_100g, prot_100g, carb_100g, fat_100g, embedding_texto, embedding_vec)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (id_cliente, refeicao_key, id_item, nome_alimento, float(cal_100g), float(prot_100g), float(carb_100g), float(fat_100g), texto_repr, embedding_vec_blob)
-            )
+        await supabase.table("planos").insert({
+            "id_cliente": id_cliente,
+            "refeicao": refeicao_key,
+            "id_item": id_item,
+            "nome": nome_alimento,
+            "cal_100g": float(cal_100g),
+            "prot_100g": float(prot_100g),
+            "carb_100g": float(carb_100g),
+            "fat_100g": float(fat_100g),
+            "embedding_texto": texto_repr,
+            "embedding_vec": json.dumps(embedding_vec_list) if embedding_vec_list else None 
+        }).execute()
         return True
-    except sqlite3.IntegrityError:
-        print(f"Item '{nome_alimento}' já existe para '{refeicao_key}' deste cliente.")
-        return False
     except Exception as e:
         print(f"Erro ao adicionar opção ao plano: {e}")
         return False
 
-def listar_plano(id_cliente: str) -> Dict[str, List[Dict[str,Any]]]:
+async def listar_plano(id_cliente: str) -> Dict[str, List[Dict[str,Any]]]:
     plano_dict = {}
-    with get_db() as db:
-        cursor = db.execute("SELECT * FROM planos WHERE id_cliente = ? ORDER BY refeicao", (id_cliente,))
-        itens = cursor.fetchall()
-        
-    for item_row in itens:
-        item = dict(item_row)
+    try:
+        res = await supabase.table("planos").select("*").eq("id_cliente", id_cliente).order("refeicao").execute()
+        itens = res.data
+    except Exception as e:
+        print(e)
+        return plano_dict
+
+    for item in itens:
         refeicao = item["refeicao"]
         if refeicao not in plano_dict:
             plano_dict[refeicao] = []
@@ -414,12 +370,14 @@ def listar_plano(id_cliente: str) -> Dict[str, List[Dict[str,Any]]]:
         
     return plano_dict
 
-def _encontrar_item_por_nome_por_embedding(id_cliente: str, texto_item: str, limiar: float=0.55) -> Optional[Tuple[str, Dict[str,Any]]]:
+async def _encontrar_item_por_nome_por_embedding(id_cliente: str, texto_item: str, limiar: float=0.55) -> Optional[Tuple[str, Dict[str,Any]]]:
     if MODELO_IA is None: return None
 
-    with get_db() as db:
-        cursor = db.execute("SELECT * FROM planos WHERE id_cliente = ? AND embedding_vec IS NOT NULL", (id_cliente,))
-        itens = cursor.fetchall()
+    try:
+        res = await supabase.table("planos").select("*").eq("id_cliente", id_cliente).execute()
+        itens = res.data
+    except Exception:
+        return None
 
     if not itens:
         return None
@@ -428,14 +386,18 @@ def _encontrar_item_por_nome_por_embedding(id_cliente: str, texto_item: str, lim
     melhor_sim = -1.0
     melhor_match = None
     
-    for item_row in itens:
-        item = dict(item_row)
-        vec_blob = item.get("embedding_vec")
-        if vec_blob is None:
+    for item in itens:
+        vec_data = item.get("embedding_vec")
+        if not vec_data:
             continue
             
         try:
-            vec = pd.np.frombuffer(vec_blob, dtype=pd.np.float32) 
+            if isinstance(vec_data, str):
+                vec_list = json.loads(vec_data)
+            else:
+                vec_list = vec_data
+
+            vec = pd.np.array(vec_list, dtype=pd.np.float32) 
             sim = float(util.cos_sim(emb_texto, vec))
             
             if sim > melhor_sim:
@@ -523,12 +485,12 @@ def extrair_itens_e_gramas(frase: str) -> List[Tuple[str, float]]:
                 resultados.append((nome, 100.0))
     return resultados
 
-def registrar_consumo(id_cliente: str, refeicao: str, nome_item_usuario: str, gramas: float) -> Dict[str, Any]:
-    cliente = get_cliente_por_id(id_cliente)
+async def registrar_consumo(id_cliente: str, refeicao: str, nome_item_usuario: str, gramas: float) -> Dict[str, Any]:
+    cliente = await get_cliente_por_id(id_cliente)
     if not cliente:
         raise ValueError("Cliente não encontrado")
 
-    encontrado = _encontrar_item_por_nome_por_embedding(id_cliente, nome_item_usuario)
+    encontrado = await _encontrar_item_por_nome_por_embedding(id_cliente, nome_item_usuario)
     if encontrado:
         refeicao_plano, item_plano = encontrado
         cal100 = item_plano["per_100g"]["cal"]
@@ -544,6 +506,7 @@ def registrar_consumo(id_cliente: str, refeicao: str, nome_item_usuario: str, gr
             nome_final = nome_item_usuario
 
     registro = {
+        "id_cliente": id_cliente,
         "data_hora": datetime.utcnow().isoformat(),
         "refeicao": refeicao,
         "nome_item": nome_final,
@@ -552,61 +515,68 @@ def registrar_consumo(id_cliente: str, refeicao: str, nome_item_usuario: str, gr
     }
 
     try:
-        with get_db() as db:
-            db.execute(
-                "INSERT INTO registros_consumo (id_cliente, data_hora, refeicao, nome_item, gramas, kcal) VALUES (?, ?, ?, ?, ?, ?)",
-                (id_cliente, registro["data_hora"], registro["refeicao"], registro["nome_item"], registro["gramas"], registro["kcal"])
-            )
-            
-            texto_log = f"registrei: {nome_final} {gramas}g no {refeicao}"
-            db.execute(
-                "INSERT INTO conversas (id_cliente, role, texto, time) VALUES (?, ?, ?, ?)",
-                (id_cliente, "user", texto_log, datetime.utcnow().isoformat())
-            )
+        await supabase.table("registros_consumo").insert(registro).execute()
+        
+        texto_log = f"registrei: {nome_final} {gramas}g no {refeicao}"
+        await _salvar_conversa(id_cliente, "user", texto_log)
         return registro
     except Exception as e:
         print(f"Erro ao registrar consumo: {e}")
         return None
 
-def consumo_total_hoje(id_cliente: str) -> Tuple[float, List[Dict[str,Any]]]:
+async def consumo_total_hoje(id_cliente: str) -> Tuple[float, List[Dict[str,Any]]]:
     hoje = date.today().isoformat()
-    with get_db() as db:
-        cursor = db.execute(
-            "SELECT * FROM registros_consumo WHERE id_cliente = ? AND data_hora LIKE ?",
-            (id_cliente, f"{hoje}%")
-        )
-        itens = [dict(row) for row in cursor.fetchall()]
+    try:
+        res = await supabase.table("registros_consumo").select("*").eq("id_cliente", id_cliente).like("data_hora", f"{hoje}%").execute()
+        itens = res.data
+    except Exception:
+        itens = []
         
     total = sum(r.get("kcal", 0.0) for r in itens)
     return total, itens
 
-def _salvar_conversa(id_cliente: str, role: str, texto: str):
+async def _salvar_conversa(id_cliente: str, role: str, texto: str):
     try:
-        with get_db() as db:
-            db.execute(
-                "INSERT INTO conversas (id_cliente, role, texto, time) VALUES (?, ?, ?, ?)",
-                (id_cliente, role, texto, datetime.utcnow().isoformat())
-            )
+        await supabase.table("conversas").insert({
+            "id_cliente": id_cliente,
+            "role": role,
+            "texto": texto,
+            "time": datetime.utcnow().isoformat()
+        }).execute()
     except Exception as e:
         print(f"Erro ao salvar conversa: {e}")
 
-def get_historico_conversa(id_cliente: str) -> List[Dict[str, Any]]:
-    with get_db() as db:
-        cursor = db.execute(
-            "SELECT role, texto, time FROM conversas WHERE id_cliente = ? ORDER BY time ASC",
-            (id_cliente,)
-        )
-        return [dict(row) for row in cursor.fetchall()]
+async def get_historico_conversa(id_cliente: str) -> List[Dict[str, Any]]:
+    try:
+        res = await supabase.table("conversas").select("role, texto, time").eq("id_cliente", id_cliente).order("time").execute()
+        return res.data
+    except Exception:
+        return []
 
-def saudacoes_cliente(id_cliente: str) -> str:
-    cliente = get_cliente_por_id(id_cliente)
+async def get_monitoramento_cliente(id_cliente: str) -> Dict[str, Any]:
+    try:
+        conv_res = await supabase.table("conversas").select("time").eq("id_cliente", id_cliente).order("time", desc=True).limit(1).execute()
+        reg_res = await supabase.table("registros_consumo").select("data_hora").eq("id_cliente", id_cliente).order("data_hora", desc=True).limit(1).execute()
+        
+        ultima_mensagem = conv_res.data[0]["time"] if conv_res.data else None
+        ultimo_registro = reg_res.data[0]["data_hora"] if reg_res.data else None
+        
+        return {
+            "ultima_mensagem": ultima_mensagem,
+            "ultimo_registro": ultimo_registro
+        }
+    except Exception as e:
+        print(f"Erro ao obter monitoramento: {e}")
+        return {"ultima_mensagem": None, "ultimo_registro": None}
+
+async def saudacoes_cliente(id_cliente: str) -> str:
+    cliente = await get_cliente_por_id(id_cliente)
     nome = cliente.get('nome','Cliente') if cliente else 'Cliente'
     resposta = f"Olá, {nome}! 👋 Estou aqui para te ajudar. Sobre o que vamos conversar hoje?"
-    _salvar_conversa(id_cliente, "bot", resposta)
     return resposta
 
-def recomendar_opcoes_refeicao(id_cliente: str, refeicao: str) -> str:
-    plano = listar_plano(id_cliente)
+async def recomendar_opcoes_refeicao(id_cliente: str, refeicao: str) -> str:
+    plano = await listar_plano(id_cliente)
     refeicao_key = refeicao.strip().lower()
     opcoes = plano.get(refeicao_key, [])
     
@@ -619,11 +589,10 @@ def recomendar_opcoes_refeicao(id_cliente: str, refeicao: str) -> str:
             linhas.append(f"• <b>{it['nome']}</b>: {p['cal']:.0f} kcal, {p.get('prot',0):.1f}g prot, {p.get('carb',0):.1f}g carb, {p.get('fat',0):.1f}g gord. (por 100g)")
         resposta = "\n".join(linhas)
 
-    _salvar_conversa(id_cliente, "bot", resposta.split('\n')[0]) 
     return resposta
 
-def recomendar_para_restante(id_cliente: str, margem_kcal: float = 0.0) -> str:
-    cliente = get_cliente_por_id(id_cliente)
+async def recomendar_para_restante(id_cliente: str, margem_kcal: float = 0.0) -> str:
+    cliente = await get_cliente_por_id(id_cliente)
     if not cliente:
         return "Cliente não encontrado."
     if not (cliente.get("peso_kg") and cliente.get("altura_cm") and cliente.get("idade")):
@@ -631,13 +600,13 @@ def recomendar_para_restante(id_cliente: str, margem_kcal: float = 0.0) -> str:
 
     bmr = calcular_bmr(cliente["peso_kg"], cliente["altura_cm"], cliente["idade"], cliente["sexo"])
     tdee = calcular_tdee(bmr, cliente.get("atividade", "sedentario"))
-    consumido, itens = consumo_total_hoje(id_cliente)
+    consumido, itens = await consumo_total_hoje(id_cliente)
     restante = tdee - consumido - margem_kcal
     
     if restante <= 50: 
         resposta = f"Parabéns! 🥳 Você já atingiu sua meta diária de ~{tdee:.0f} kcal (consumido: {consumido:.0f} kcal). Por hoje, o ideal é focar em bebidas sem calorias, como água ou chá."
     else:
-        plano = listar_plano(id_cliente)
+        plano = await listar_plano(id_cliente)
         candidatos = []
         for refeicao, lista in plano.items():
             for item in lista:
@@ -657,7 +626,6 @@ def recomendar_para_restante(id_cliente: str, margem_kcal: float = 0.0) -> str:
                 linhas.append(f"• <b>{nome}</b> ({refeicao}): Até <b>{maxg}g</b> (~{cal100:.0f} kcal/100g)")
             resposta = "\n".join(linhas)
 
-    _salvar_conversa(id_cliente, "bot", resposta.split('\n')[0])
     return resposta
 
 def interpretar_intencao(pergunta: str) -> Tuple[Optional[str], float]:
@@ -673,21 +641,19 @@ def interpretar_intencao(pergunta: str) -> Tuple[Optional[str], float]:
             melhor = chave
     return melhor, melhor_sim
 
-def ultima_resposta_contexto(id_cliente: str) -> Optional[Dict[str,Any]]:
-    with get_db() as db:
-        cursor = db.execute(
-            "SELECT * FROM conversas WHERE id_cliente = ? AND role = 'bot' ORDER BY time DESC LIMIT 1",
-            (id_cliente,)
-        )
-        ultima = cursor.fetchone()
-        return dict(ultima) if ultima else None
+async def ultima_resposta_contexto(id_cliente: str) -> Optional[Dict[str,Any]]:
+    try:
+        res = await supabase.table("conversas").select("*").eq("id_cliente", id_cliente).eq("role", "bot").order("time", desc=True).limit(1).execute()
+        return res.data[0] if res.data else None
+    except Exception:
+        return None
 
-def procurar_item_por_texto_no_plano(id_cliente: str, texto: str) -> Optional[Dict[str,Any]]:
-    match_emb = _encontrar_item_por_nome_por_embedding(id_cliente, texto)
+async def procurar_item_por_texto_no_plano(id_cliente: str, texto: str) -> Optional[Dict[str,Any]]:
+    match_emb = await _encontrar_item_por_nome_por_embedding(id_cliente, texto)
     if match_emb:
         return match_emb[1] 
 
-    plano = listar_plano(id_cliente)
+    plano = await listar_plano(id_cliente)
     texto_norm = normalizar_texto(texto)
     for refeicao, itens in plano.items():
         for item in itens:
@@ -695,8 +661,8 @@ def procurar_item_por_texto_no_plano(id_cliente: str, texto: str) -> Optional[Di
                 return item
     return None
 
-def mostrar_informacoes_cliente(id_cliente: str) -> str:
-    cliente = get_cliente_por_id(id_cliente)
+async def mostrar_informacoes_cliente(id_cliente: str) -> str:
+    cliente = await get_cliente_por_id(id_cliente)
     if not cliente:
         return "Cliente não encontrado."
     
@@ -708,7 +674,7 @@ def mostrar_informacoes_cliente(id_cliente: str) -> str:
         bmr = calcular_bmr(peso, altura, idade, cliente.get("sexo", "f"))
         tdee = calcular_tdee(bmr, cliente.get("atividade", "sedentario"))
         agua_ml = recomendacao_agua_ml(peso) if peso else None
-        consumo_hoje, itens = consumo_total_hoje(id_cliente)
+        consumo_hoje, itens = await consumo_total_hoje(id_cliente)
         imc = calcular_imc(peso, altura)
         imc_class = classificar_imc(imc)
 
@@ -726,11 +692,10 @@ def mostrar_informacoes_cliente(id_cliente: str) -> str:
     except Exception as e:
         resposta = "Parece que alguns dos seus dados de perfil (peso, altura, idade) não estão preenchidos. Peça para seu/sua nutri completar seu cadastro! 😉"
 
-    _salvar_conversa(id_cliente, "bot", resposta.split('\n')[0]) 
     return resposta
 
-def gerar_relatorio_completo_cliente(id_cliente: str) -> str:
-    cliente = get_cliente_por_id(id_cliente)
+async def gerar_relatorio_completo_cliente(id_cliente: str) -> str:
+    cliente = await get_cliente_por_id(id_cliente)
     if not cliente:
         return "Cliente não encontrado."
 
@@ -760,9 +725,10 @@ def gerar_relatorio_completo_cliente(id_cliente: str) -> str:
         except Exception:
             pass
     
-    plano = listar_plano(id_cliente)
-    consumo_hoje_total, ultimos_registros = consumo_total_hoje(id_cliente)
-    conversas = get_historico_conversa(id_cliente)[-10:] 
+    plano = await listar_plano(id_cliente)
+    consumo_hoje_total, ultimos_registros = await consumo_total_hoje(id_cliente)
+    conversas = await get_historico_conversa(id_cliente)
+    conversas = conversas[-10:] 
 
     linhas = [
         "Aqui está o relatório completo que eu gero para seu/sua nutri (e para você, claro! 😉):",
@@ -787,7 +753,6 @@ def gerar_relatorio_completo_cliente(id_cliente: str) -> str:
                 p = item.get("per_100g", {})
                 linhas.append(f"    - {item.get('nome')}: {p.get('cal',0):.0f} kcal/100g")
 
-
     linhas.append("\n<b>--- REGISTROS DE HOJE ---</b>")
     if not ultimos_registros:
         linhas.append("• Sem registros de consumo hoje.")
@@ -804,51 +769,45 @@ def gerar_relatorio_completo_cliente(id_cliente: str) -> str:
 
     return "\n".join(linhas)
 
-
-def responder_pergunta(id_cliente: str, texto: str) -> str:
-    _salvar_conversa(id_cliente, "user", texto)
-    
+async def _gerar_contexto_calculado(id_cliente: str, texto: str) -> str:
     texto_lower = texto.lower().strip()
     
     if re.search(r'(forne(c|ç)a|me dê|me de|me mande|)\s+(todas as informa(c|ç)oes|meu resumo|meu relatório)', texto_lower):
-        resposta = gerar_relatorio_completo_cliente(id_cliente)
-        _salvar_conversa(id_cliente, "bot", "Gerando relatório completo...") 
+        resposta = await gerar_relatorio_completo_cliente(id_cliente)
         return resposta
 
     m_peso = re.search(r'\b(?:meu\s+)?peso\s*(?:é|=)?\s*(\d+(?:[.,]\d+)?)\s*(kg)?\b', texto_lower)
     if m_peso:
         peso_novo = float(m_peso.group(1).replace(",", "."))
-        if atualizar_cliente(id_cliente, {"peso_kg": peso_novo}):
+        if await atualizar_cliente(id_cliente, {"peso_kg": peso_novo}):
             resposta = f"Entendido! Atualizei seu peso para <b>{peso_novo:.1f} kg</b>. Vou usar esse valor para recalcular suas metas de calorias e água. 👍"
         else:
             resposta = "Erro ao atualizar peso. Peça para a nutricionista atualizar manualmente."
-        _salvar_conversa(id_cliente, "bot", resposta)
         return resposta
 
     if any(w in texto_lower for w in ["água", "agua", "quanta água", "quanta agua"]):
-        cliente = get_cliente_por_id(id_cliente)
+        cliente = await get_cliente_por_id(id_cliente)
         if cliente and cliente.get("peso_kg"):
             ml = recomendacao_agua_ml(cliente["peso_kg"])
             resposta = f"Com base no seu peso, a sugestão de ingestão de água é de <b>~{int(ml)} ml/dia</b> (cerca de {ml/1000:.2f} L). Mantenha-se hidratado! 💧"
         else:
             resposta = "Não tenho seu peso cadastrado. Peça para a nutricionista cadastrar ou escreva 'Meu peso 72kg' para atualizar."
-        _salvar_conversa(id_cliente, "bot", resposta)
         return resposta
 
     chave_intencao, sim = interpretar_intencao(texto_lower)
     
     if chave_intencao == "saudacoes" and sim > 0.5:
-        return saudacoes_cliente(id_cliente) 
+        return await saudacoes_cliente(id_cliente) 
     if chave_intencao == "perguntar_opcoes_cafe" and sim > 0.5:
-        return recomendar_opcoes_refeicao(id_cliente, "cafe da manha") 
+        return await recomendar_opcoes_refeicao(id_cliente, "cafe da manha") 
     if chave_intencao == "perguntar_opcoes_almoco" and sim > 0.5:
-        return recomendar_opcoes_refeicao(id_cliente, "almoco") 
+        return await recomendar_opcoes_refeicao(id_cliente, "almoco") 
     if chave_intencao == "perguntar_opcoes_janta" and sim > 0.5:
-        return recomendar_opcoes_refeicao(id_cliente, "janta") 
+        return await recomendar_opcoes_refeicao(id_cliente, "janta") 
     if chave_intencao == "calorias_disponiveis" and sim > 0.5:
-        return recomendar_para_restante(id_cliente) 
+        return await recomendar_para_restante(id_cliente) 
     if chave_intencao == "mostrar_info" and sim > 0.5:
-        resposta = mostrar_informacoes_cliente(id_cliente)
+        resposta = await mostrar_informacoes_cliente(id_cliente)
         return resposta
 
     if "comi" in texto_lower or "comemos" in texto_lower or "comeu" in texto_lower or "registrei" in texto_lower or "anota aí" in texto_lower:
@@ -864,16 +823,15 @@ def responder_pergunta(id_cliente: str, texto: str) -> str:
         else:
             mensagens = []
             for nome_item, gramas in pares:
-                registro = registrar_consumo(id_cliente, refeicao_encontrada, nome_item, gramas)
+                registro = await registrar_consumo(id_cliente, refeicao_encontrada, nome_item, gramas)
                 if registro:
                     mensagens.append(f"Anotado! ✅ <b>{registro['nome_item']}</b> ({registro['gramas']}g) com ~{registro['kcal']:.0f} kcal.")
             resposta = "\n".join(mensagens)
         
-        _salvar_conversa(id_cliente, "bot", resposta)
         return resposta
 
     if any(k in texto_lower for k in ["quanto isso", "quantas calorias", "quantas kcal", "quanto tem"]):
-        ultima = ultima_resposta_contexto(id_cliente)
+        ultima = await ultima_resposta_contexto(id_cliente)
         if not ultima:
             resposta = "Não achei referência anterior clara."
         else:
@@ -884,18 +842,76 @@ def responder_pergunta(id_cliente: str, texto: str) -> str:
             else:
                 resposta = "Não consegui inferir as calorias da mensagem anterior."
         
-        _salvar_conversa(id_cliente, "bot", resposta)
         return resposta
 
-    match = procurar_item_por_texto_no_plano(id_cliente, texto_lower)
+    match = await procurar_item_por_texto_no_plano(id_cliente, texto_lower)
     if match:
         p = match["per_100g"]
         resposta = f"Encontrei <b>{match['nome']}</b> no seu plano! Aqui estão os detalhes (para 100g):\n• <b>Calorias:</b> {p['cal']:.0f} kcal\n• <b>Proteínas:</b> {p.get('prot',0):.1f}g\n• <b>Carboidratos:</b> {p.get('carb',0):.1f}g\n• <b>Gorduras:</b> {p.get('fat',0):.1f}g"
     else:
         resposta = "Desculpe, não consegui entender. 😅 Você pode tentar perguntar de outra forma? Lembre-se que eu funciono melhor com perguntas como 'O que posso jantar?' ou 'Comi 150g de frango'."
     
-    _salvar_conversa(id_cliente, "bot", resposta)
     return resposta
+
+async def responder_pergunta(id_cliente: str, texto: str) -> str:
+    # 1. Salvar a mensagem do usuário
+    await _salvar_conversa(id_cliente, "user", texto)
+    
+    # 2. Obter o texto lógico puramente calculado pelo RAG interno
+    contexto_calculado = await _gerar_contexto_calculado(id_cliente, texto)
+    
+    # 3. Preparar contexto do LLM
+    cliente = await get_cliente_por_id(id_cliente)
+    persona = "Um(a) assistente amigável e focado(a) na saúde."
+    restricoes = "Não dar diagnósticos médicos."
+    
+    if cliente and cliente.get("id_nutri"):
+        config = await get_bot_config(cliente["id_nutri"])
+        if config:
+            persona = config.get("bot_persona") or persona
+            restricoes = config.get("bot_restricoes") or restricoes
+            
+    # Sobrepor as restrições individuais do paciente, se houver
+    if cliente and cliente.get("ia_persona"):
+        persona = cliente.get("ia_persona")
+    
+    if cliente and cliente.get("ia_restricoes"):
+        restricoes = restricoes + "\n\nRESTRIÇÕES ESPECÍFICAS DESTE PACIENTE:\n" + cliente.get("ia_restricoes")
+
+    gemini_key = os.environ.get("GEMINI_API_KEY")
+    if not gemini_key:
+        print("Fallback: GEMINI_API_KEY ausente. Retornando texto calculado cru.")
+        resposta_final = contexto_calculado
+    else:
+        try:
+            model = genai.GenerativeModel("gemini-pro") # Modelo padrão e amplamente compatível
+            prompt = f"""Você é o nutricionista deste paciente (cliente). Aja de forma empática, natural e humana.
+Sua persona: {persona}
+Suas restrições/instruções extras: {restricoes}
+
+O paciente acabou de falar a seguinte mensagem: "{texto}"
+
+O nosso sistema já rodou a lógica interna e extraiu os seguintes DADOS E CÁLCULOS EXATOS:
+--- INÍCIO DOS CÁLCULOS DO SISTEMA ---
+{contexto_calculado}
+--- FIM DOS CÁLCULOS DO SISTEMA ---
+
+REGRAS ESTABELECIDAS:
+1. Responda ao paciente baseando-se EXCLUSIVAMENTE nos dados fornecidos nos "CÁLCULOS DO SISTEMA". Você é apenas a "voz" da resposta.
+2. É ESTRITAMENTE PROIBIDO inventar valores calóricos, pesos, ou alimentos. Se o cálculo disse que a comida tem X calorias, use esse valor.
+3. Se os cálculos disserem que não há opções, que faltam dados, ou que não entendeu, responda de acordo e de forma amigável.
+4. Você pode formatar o texto (usar negrito, quebras de linha e emojis).
+5. Fale diretamente com o paciente. Nunca mencione que você recebeu "cálculos do sistema" ou que você é uma IA.
+"""
+            response = model.generate_content(prompt)
+            resposta_final = response.text.strip()
+        except Exception as e:
+            print(f"Erro ao gerar resposta com Gemini: {e}")
+            resposta_final = contexto_calculado
+
+    # 4. Salvar a resposta final gerada e retorná-la
+    await _salvar_conversa(id_cliente, "bot", resposta_final)
+    return resposta_final
 
 def buscar_alimento_base_dados(nome_alimento: str) -> List[Dict[str, Any]]:
     if DF_ALIMENTOS is None:

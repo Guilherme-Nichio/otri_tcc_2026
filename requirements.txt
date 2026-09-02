@@ -6,4 +6,7 @@ unidecode
 sentence-transformers
 torch
 numpy
-openpyxl 
+openpyxl
+supabase
+python-dotenv
+google-generativeai

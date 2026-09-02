@@ -1,0 +1,999 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Plano Alimentar — Cadastro</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg: #EEF1F4;
+    --card: #FFFFFF;
+    --border: #E0E4E9;
+    --border-soft: #EBEEF1;
+    --text: #29323C;
+    --text-muted: #667085;
+    --text-faint: #98A2B3;
+    --green: #1E9E5A;
+    --green-dark: #16803F;
+    --green-soft: #E7F7EE;
+    --blue: #2A5CE0;
+    --blue-soft: #EAF0FE;
+    --red: #E4483A;
+    --red-soft: #FCEBE9;
+    --radius-lg: 16px;
+    --radius-md: 10px;
+    --radius-sm: 7px;
+    --shadow: 0 1px 2px rgba(16,24,40,.04), 0 1px 3px rgba(16,24,40,.06);
+    --shadow-lg: 0 8px 24px rgba(16,24,40,.10), 0 2px 6px rgba(16,24,40,.06);
+  }
+
+  *{ box-sizing:border-box; }
+  html,body{ margin:0; padding:0; }
+  body{
+    background:var(--bg);
+    color:var(--text);
+    font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;
+    -webkit-font-smoothing:antialiased;
+    padding:40px 20px 120px;
+  }
+  .mono{ font-family:'JetBrains Mono', ui-monospace, monospace; }
+
+  .page{ max-width:880px; margin:0 auto; }
+
+  /* ---------- Topbar ---------- */
+  .topbar{
+    background:var(--card);
+    border:1px solid var(--border);
+    border-radius:var(--radius-lg);
+    box-shadow:var(--shadow);
+    padding:24px 28px 22px;
+    margin-bottom:20px;
+  }
+  .topbar__row{
+    display:flex;
+    align-items:flex-start;
+    justify-content:space-between;
+    gap:20px;
+    flex-wrap:wrap;
+  }
+  .topbar__title-group h1{
+    font-size:22px;
+    font-weight:800;
+    letter-spacing:-0.02em;
+    color:#31394A;
+    margin:0 0 4px;
+  }
+  .topbar__title-group p{
+    margin:0;
+    font-size:13.5px;
+    color:var(--text-muted);
+  }
+  .topbar__rule{
+    height:2px;
+    background:linear-gradient(90deg, var(--green) 0%, var(--green) 60%, transparent 100%);
+    border:none;
+    margin:16px 0 20px;
+  }
+  .patient-grid{
+    display:grid;
+    grid-template-columns:1.4fr 1fr;
+    gap:14px;
+  }
+  @media(max-width:640px){ .patient-grid{ grid-template-columns:1fr; } }
+
+  .field label{
+    display:block;
+    font-size:12.5px;
+    font-weight:600;
+    color:var(--text-muted);
+    margin-bottom:6px;
+  }
+  .field input[type=text],
+  .field input[type=time],
+  .field textarea,
+  .field select{
+    width:100%;
+    font:inherit;
+    font-size:14px;
+    color:var(--text);
+    background:#fff;
+    border:1px solid #D5DAE1;
+    border-radius:var(--radius-md);
+    padding:10px 12px;
+    outline:none;
+    transition:border-color .15s, box-shadow .15s;
+  }
+  .field textarea{ resize:vertical; min-height:44px; font-family:inherit; }
+  .field input:focus, .field select:focus, .field textarea:focus{
+    border-color:var(--blue);
+    box-shadow:0 0 0 3px var(--blue-soft);
+  }
+
+  /* ---------- Validation banner ---------- */
+  .banner{
+    display:none;
+    align-items:flex-start;
+    gap:10px;
+    background:var(--red-soft);
+    border:1px solid #F3C9C4;
+    color:#9A2A20;
+    padding:12px 16px;
+    border-radius:var(--radius-md);
+    font-size:13.5px;
+    margin-bottom:18px;
+  }
+  .banner.show{ display:flex; }
+  .banner.success{
+    background:var(--green-soft); border-color:#B7E4C9; color:var(--green-dark);
+  }
+
+  /* ---------- Meal card ---------- */
+  .meal-card{
+    background:var(--card);
+    border:1px solid var(--border);
+    border-radius:var(--radius-lg);
+    box-shadow:var(--shadow);
+    padding:22px 24px 20px;
+    margin-bottom:18px;
+  }
+  .meal-card__head{
+    display:flex;
+    align-items:flex-start;
+    justify-content:space-between;
+    gap:16px;
+    flex-wrap:wrap;
+  }
+  .meal-card__title-group{ display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  .meal-index{
+    font-size:11.5px;
+    font-weight:700;
+    letter-spacing:.06em;
+    text-transform:uppercase;
+    color:var(--green-dark);
+    background:var(--green-soft);
+    padding:4px 9px;
+    border-radius:999px;
+    white-space:nowrap;
+  }
+  .meal-type-select{
+    font:inherit;
+    font-size:15px;
+    font-weight:700;
+    color:var(--text);
+    background:#fff;
+    border:1px solid #D5DAE1;
+    border-radius:var(--radius-md);
+    padding:9px 34px 9px 12px;
+    outline:none;
+    appearance:none;
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23667085' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
+    background-repeat:no-repeat;
+    background-position:right 10px center;
+    cursor:pointer;
+  }
+  .meal-type-select:focus{ border-color:var(--blue); box-shadow:0 0 0 3px var(--blue-soft); }
+
+  .meal-card__meta{ display:flex; align-items:center; gap:10px; }
+  .time-field{ display:flex; align-items:center; gap:7px; font-size:13px; color:var(--text-muted); }
+  .time-field input[type=time]{
+    font:inherit; font-size:13.5px; border:1px solid #D5DAE1; border-radius:var(--radius-sm);
+    padding:6px 8px; outline:none;
+  }
+  .time-field input[type=time]:focus{ border-color:var(--blue); box-shadow:0 0 0 3px var(--blue-soft); }
+
+  .meal-card__hint{
+    font-size:12.5px;
+    color:var(--text-faint);
+    margin:10px 0 16px;
+  }
+
+  .icon-btn{
+    display:inline-flex; align-items:center; justify-content:center;
+    width:28px; height:28px;
+    border-radius:8px;
+    border:1px solid transparent;
+    background:transparent;
+    color:var(--text-faint);
+    cursor:pointer;
+    font-size:14px;
+    line-height:1;
+    transition:background .15s, color .15s;
+  }
+  .icon-btn:hover{ background:#F2F4F7; color:var(--text-muted); }
+  .icon-btn.danger:hover{ background:var(--red-soft); color:var(--red); }
+  .icon-btn.subtle{ width:auto; padding:5px 10px; font-size:12.5px; font-weight:600; color:var(--text-muted); }
+  .icon-btn.subtle:hover{ background:#F2F4F7; color:var(--text); }
+
+  /* ---------- Option block ---------- */
+  .options-list{ display:flex; flex-direction:column; gap:14px; }
+  .option-block{
+    border:1px dashed #D5DAE1;
+    border-radius:var(--radius-md);
+    padding:14px 16px 16px;
+    background:#FBFCFD;
+  }
+  .option-block__head{
+    display:flex; align-items:center; justify-content:space-between;
+    margin-bottom:10px;
+  }
+  .option-label{
+    font-size:12.5px; font-weight:700; color:#5B6472;
+    display:flex; align-items:center; gap:6px;
+  }
+  .option-label::before{
+    content:"";
+    width:6px; height:6px; border-radius:50%;
+    background:var(--blue);
+    display:inline-block;
+  }
+
+  .food-rows{ display:flex; flex-direction:column; gap:8px; }
+  .food-row{
+    display:grid;
+    grid-template-columns:74px 150px 1fr auto auto;
+    align-items:center;
+    gap:8px;
+    background:#fff;
+    border:1px solid var(--border-soft);
+    border-radius:var(--radius-sm);
+    padding:7px 8px;
+  }
+  @media(max-width:720px){
+    .food-row{ grid-template-columns:1fr 1fr; grid-template-areas:"qty unit" "name name" "toggle del"; }
+    .food-row .qty-input{ grid-area:qty; }
+    .food-row .unit-select{ grid-area:unit; }
+    .food-row .food-name-wrap{ grid-area:name; }
+    .food-row .toggle-db{ grid-area:toggle; }
+    .food-row .remove-food-btn{ grid-area:del; justify-self:end; }
+  }
+
+  .qty-input, .unit-select{
+    font:inherit; font-size:13.5px; color:var(--text);
+    border:1px solid #D9DEE4; border-radius:6px;
+    padding:7px 8px; outline:none; background:#fff; width:100%;
+  }
+  .qty-input:focus, .unit-select:focus{ border-color:var(--blue); box-shadow:0 0 0 3px var(--blue-soft); }
+  .unit-select{ appearance:none; padding-right:24px;
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23667085' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
+    background-repeat:no-repeat; background-position:right 6px center;
+  }
+
+  .food-name-wrap{ position:relative; display:flex; align-items:center; gap:6px; min-width:0; }
+  .food-name-input{
+    font:inherit; font-size:13.5px; color:var(--text);
+    border:1px solid #D9DEE4; border-radius:6px;
+    padding:7px 10px; outline:none; width:100%; background:#fff;
+  }
+  .food-name-input:focus{ border-color:var(--blue); box-shadow:0 0 0 3px var(--blue-soft); }
+  .db-badge{
+    flex-shrink:0;
+    font-size:11px; font-weight:600;
+    color:var(--green-dark);
+    background:var(--green-soft);
+    border-radius:999px;
+    padding:3px 8px;
+    white-space:nowrap;
+  }
+  .custom-badge{
+    flex-shrink:0;
+    font-size:11px; font-weight:600;
+    color:#8A5A00;
+    background:#FFF3DB;
+    border-radius:999px;
+    padding:3px 8px;
+    white-space:nowrap;
+  }
+
+  .toggle-db{
+    display:flex; align-items:center; gap:6px;
+    font-size:11.5px; color:var(--text-faint);
+    white-space:nowrap;
+    cursor:pointer;
+    user-select:none;
+  }
+  .toggle-db input{ accent-color:var(--green); width:14px; height:14px; cursor:pointer; }
+
+  .remove-food-btn{ width:26px; height:26px; }
+
+  .btn-add-food{
+    align-self:flex-start;
+    margin-top:10px;
+    background:none; border:none;
+    color:var(--blue);
+    font:inherit; font-size:12.5px; font-weight:600;
+    cursor:pointer;
+    padding:4px 2px;
+  }
+  .btn-add-food:hover{ text-decoration:underline; }
+
+  .btn-add-option{
+    margin-top:16px;
+    display:inline-flex; align-items:center; gap:6px;
+    background:#fff;
+    border:1px solid #D5DAE1;
+    color:var(--text);
+    font:inherit; font-size:13px; font-weight:600;
+    padding:9px 14px;
+    border-radius:var(--radius-md);
+    cursor:pointer;
+    transition:border-color .15s, background .15s;
+  }
+  .btn-add-option:hover{ background:#F7F8FA; border-color:#B9C0CA; }
+
+  /* ---------- Add meal / footer actions ---------- */
+  .add-meal-btn{
+    width:100%;
+    display:flex; align-items:center; justify-content:center; gap:8px;
+    background:#fff;
+    border:1.5px dashed #C6CCD4;
+    color:var(--text-muted);
+    font:inherit; font-size:14px; font-weight:600;
+    padding:16px;
+    border-radius:var(--radius-lg);
+    cursor:pointer;
+    transition:border-color .15s, color .15s, background .15s;
+    margin-bottom:28px;
+  }
+  .add-meal-btn:hover{ border-color:var(--green); color:var(--green-dark); background:var(--green-soft); }
+
+  .footer-actions{
+    position:sticky;
+    bottom:16px;
+    display:flex; justify-content:flex-end; gap:10px;
+    background:rgba(238,241,244,.9);
+    backdrop-filter:blur(6px);
+    padding:12px;
+    border-radius:var(--radius-lg);
+  }
+  .btn{
+    font:inherit; font-size:14px; font-weight:700;
+    padding:11px 20px;
+    border-radius:var(--radius-md);
+    cursor:pointer;
+    border:1px solid transparent;
+    transition:transform .05s ease, opacity .15s;
+  }
+  .btn:active{ transform:translateY(1px); }
+  .btn-secondary{ background:#fff; border-color:#D5DAE1; color:var(--text); }
+  .btn-secondary:hover{ background:#F7F8FA; }
+  .btn-primary{ background:var(--green); color:#fff; box-shadow:0 1px 2px rgba(16,24,40,.08); }
+  .btn-primary:hover{ background:var(--green-dark); }
+
+  /* ---------- Autocomplete suggestions ---------- */
+  .suggestions{
+    position:absolute;
+    z-index:60;
+    background:#fff;
+    border:1px solid #D5DAE1;
+    border-bottom:2px solid var(--green);
+    border-radius:10px;
+    box-shadow:var(--shadow-lg);
+    max-height:230px;
+    overflow-y:auto;
+    display:none;
+  }
+  .suggestions.show{ display:block; }
+  .suggestion-item{
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+    padding:9px 12px;
+    font-size:13.5px;
+    cursor:pointer;
+    color:var(--text);
+  }
+  .suggestion-item .kcal{ font-size:11.5px; color:var(--text-faint); flex-shrink:0; }
+  .suggestion-item.active{ background:var(--blue); color:#fff; }
+  .suggestion-item.active .kcal{ color:#DCE6FF; }
+  .suggestion-empty{ padding:12px; font-size:12.5px; color:var(--text-faint); }
+
+  /* ---------- JSON modal ---------- */
+  .modal-overlay{
+    position:fixed; inset:0; background:rgba(20,24,31,.5);
+    display:none; align-items:flex-start; justify-content:center;
+    padding:6vh 20px; z-index:100; overflow-y:auto;
+  }
+  .modal-overlay.show{ display:flex; }
+  .modal{
+    background:#0F1720; color:#D5DCE5;
+    width:100%; max-width:720px;
+    border-radius:14px;
+    box-shadow:var(--shadow-lg);
+    overflow:hidden;
+  }
+  .modal__head{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:14px 18px;
+    background:#161F2C;
+    border-bottom:1px solid #232E3D;
+  }
+  .modal__head h3{ margin:0; font-size:14px; color:#fff; font-weight:700; }
+  .modal__head button{
+    background:none; border:none; color:#8A94A3; font-size:18px; cursor:pointer; line-height:1;
+  }
+  .modal__body{ padding:16px 18px; }
+  .modal__body pre{
+    margin:0; font-size:12.5px; line-height:1.6; white-space:pre-wrap; word-break:break-word;
+  }
+  .modal__foot{
+    padding:12px 18px; border-top:1px solid #232E3D; display:flex; justify-content:flex-end; gap:8px;
+  }
+  .modal__foot .btn-secondary{ background:#1B2531; border-color:#2A3646; color:#D5DCE5; }
+  .modal__foot .btn-secondary:hover{ background:#232E3D; }
+
+  .visually-hidden{
+    position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap;
+  }
+
+  :focus-visible{ outline:2px solid var(--blue); outline-offset:2px; }
+</style>
+</head>
+<body>
+
+<div class="page">
+
+  <!-- ---------- Cabeçalho ---------- -->
+  <div class="topbar">
+    <div class="topbar__row">
+      <div class="topbar__title-group">
+        <h1>Plano Alimentar</h1>
+        <p>Monte refeições com uma ou mais opções, cada uma com seus próprios alimentos.</p>
+      </div>
+    </div>
+    <hr class="topbar__rule">
+    <div class="patient-grid">
+      <div class="field">
+        <label for="pacienteInput">Paciente</label>
+        <input type="text" id="pacienteInput" placeholder="Nome do paciente">
+      </div>
+      <div class="field">
+        <label for="observacoesInput">Observações gerais (opcional)</label>
+        <input type="text" id="observacoesInput" placeholder="Ex: evitar frituras, beber 2L de água por dia...">
+      </div>
+    </div>
+  </div>
+
+  <!-- ---------- Banner de validação ---------- -->
+  <div class="banner" id="banner" role="alert"></div>
+
+  <!-- ---------- Refeições (injetado via JS) ---------- -->
+  <div id="mealsContainer"></div>
+
+  <button class="add-meal-btn" id="addMealBtn" type="button">+ Adicionar refeição</button>
+
+  <div class="footer-actions">
+    <button class="btn btn-secondary" id="previewBtn" type="button">Ver JSON gerado</button>
+    <button class="btn btn-primary" id="saveBtn" type="button">Salvar plano alimentar</button>
+  </div>
+</div>
+
+<!-- ---------- Modal JSON ---------- -->
+<div class="modal-overlay" id="modalOverlay">
+  <div class="modal">
+    <div class="modal__head">
+      <h3>Payload que seria enviado ao backend</h3>
+      <button id="closeModalBtn" aria-label="Fechar">✕</button>
+    </div>
+    <div class="modal__body">
+      <pre class="mono" id="jsonOutput"></pre>
+    </div>
+    <div class="modal__foot">
+      <button class="btn btn-secondary" id="copyJsonBtn" type="button">Copiar JSON</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  /* =========================================================================
+     BASE DE ALIMENTOS (mock)
+     Em produção, isso deve vir de uma busca no backend, ex:
+     GET /api/alimentos?busca=ovo  -> retorna itens da tabela de composição
+     de alimentos (TACO/TBCA ou base própria).
+     kcal aqui é "kcal por 1 unidade padrão" só para dar uma noção de valor
+     de referência na tela — não deve ser tratado como cálculo nutricional
+     definitivo.
+  ========================================================================= */
+  const FOOD_DB = [
+    {id:"f1",  nome:"Pão de forma integral",        unidade:"fatia",          kcal:70},
+    {id:"f2",  nome:"Pão francês",                   unidade:"unidade",        kcal:150},
+    {id:"f3",  nome:"Ovo cozido",                    unidade:"unidade",        kcal:78},
+    {id:"f4",  nome:"Ovo mexido",                    unidade:"unidade",        kcal:90},
+    {id:"f5",  nome:"Tapioca (goma hidratada)",      unidade:"g",              kcal:0.33},
+    {id:"f6",  nome:"Aveia em flocos",                unidade:"g",              kcal:3.9},
+    {id:"f7",  nome:"Banana prata",                   unidade:"unidade",        kcal:98},
+    {id:"f8",  nome:"Maçã",                            unidade:"unidade",        kcal:95},
+    {id:"f9",  nome:"Leite desnatado",                unidade:"ml",             kcal:0.35},
+    {id:"f10", nome:"Iogurte natural desnatado",      unidade:"g",              kcal:0.6},
+    {id:"f11", nome:"Queijo minas frescal",           unidade:"g",              kcal:2.6},
+    {id:"f12", nome:"Whey protein (1 scoop)",         unidade:"unidade",        kcal:120},
+    {id:"f13", nome:"Arroz branco cozido",            unidade:"g",              kcal:1.3},
+    {id:"f14", nome:"Feijão carioca cozido",          unidade:"g",              kcal:0.76},
+    {id:"f15", nome:"Peito de frango grelhado",       unidade:"g",              kcal:1.65},
+    {id:"f16", nome:"Batata doce cozida",             unidade:"g",              kcal:0.86},
+    {id:"f17", nome:"Brócolis cozido",                unidade:"g",              kcal:0.35},
+    {id:"f18", nome:"Cenoura crua",                   unidade:"g",              kcal:0.41},
+    {id:"f19", nome:"Alface",                          unidade:"g",              kcal:0.15},
+    {id:"f20", nome:"Tomate",                          unidade:"g",              kcal:0.18},
+    {id:"f21", nome:"Carne bovina magra grelhada",    unidade:"g",              kcal:2.1},
+    {id:"f22", nome:"Salmão grelhado",                unidade:"g",              kcal:2.08},
+    {id:"f23", nome:"Quinoa cozida",                  unidade:"g",              kcal:1.2},
+    {id:"f24", nome:"Abacate",                         unidade:"g",              kcal:1.6},
+    {id:"f25", nome:"Pasta de amendoim integral",     unidade:"colher de sopa", kcal:95},
+    {id:"f26", nome:"Castanha do Pará",               unidade:"unidade",        kcal:29},
+    {id:"f27", nome:"Azeite de oliva extravirgem",    unidade:"colher de sopa", kcal:119},
+    {id:"f28", nome:"Mel",                              unidade:"colher de sopa", kcal:64},
+    {id:"f29", nome:"Granola sem açúcar",             unidade:"g",              kcal:4.5},
+    {id:"f30", nome:"Suco de laranja natural",        unidade:"ml",             kcal:0.45},
+    {id:"f31", nome:"Requeijão light",                 unidade:"colher de sopa", kcal:30},
+    {id:"f32", nome:"Torrada integral",                unidade:"unidade",        kcal:25},
+    {id:"f33", nome:"Presunto magro",                  unidade:"fatia",          kcal:25},
+    {id:"f34", nome:"Peito de peru fatiado",          unidade:"fatia",          kcal:20},
+  ];
+
+  const UNITS = ["g","ml","unidade","fatia","colher de sopa","colher de chá","xícara","concha","a gosto"];
+
+  const MEAL_TYPES = [
+    {value:"cafe_da_manha", label:"Café da Manhã"},
+    {value:"lanche_manha",  label:"Lanche da Manhã"},
+    {value:"almoco",        label:"Almoço"},
+    {value:"lanche_tarde",  label:"Lanche da Tarde"},
+    {value:"pre_treino",    label:"Pré-treino"},
+    {value:"pos_treino",    label:"Pós-treino"},
+    {value:"janta",         label:"Janta"},
+    {value:"ceia",          label:"Ceia"},
+    {value:"outro",         label:"Outra refeição"},
+  ];
+
+  /* =========================================================================
+     ESTADO
+  ========================================================================= */
+  let uidCounter = 1;
+  const uid = () => "id" + (uidCounter++);
+
+  function novoAlimento(){
+    return { id: uid(), quantidade: 1, unidade: "unidade", nome: "", daTabela: true, alimentoId: null };
+  }
+  function novaOpcao(){
+    return { id: uid(), alimentos: [ novoAlimento() ] };
+  }
+  function novaRefeicao(tipo){
+    return { id: uid(), tipo: tipo || "cafe_da_manha", horario: "", opcoes: [ novaOpcao() ] };
+  }
+
+  const state = {
+    paciente: "",
+    observacoes: "",
+    refeicoes: [ novaRefeicao("cafe_da_manha") ],
+  };
+
+  /* =========================================================================
+     HELPERS
+  ========================================================================= */
+  function escapeHtml(str){
+    return String(str ?? "").replace(/[&<>"']/g, m => ({
+      "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"
+    }[m]));
+  }
+  function normalize(str){
+    return String(str ?? "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  }
+  function findMeal(mealId){ return state.refeicoes.find(r => r.id === mealId); }
+  function findOpcao(meal, opcaoId){ return meal.opcoes.find(o => o.id === opcaoId); }
+  function findAlimento(opcao, alimentoId){ return opcao.alimentos.find(a => a.id === alimentoId); }
+  function mealLabel(tipo){ return (MEAL_TYPES.find(t => t.value === tipo) || {}).label || tipo; }
+
+  /* =========================================================================
+     RENDER
+  ========================================================================= */
+  const mealsContainer = document.getElementById("mealsContainer");
+
+  function render(){
+    mealsContainer.innerHTML = state.refeicoes.map((meal, idx) => renderMeal(meal, idx)).join("");
+  }
+
+  function renderMeal(meal, idx){
+    const kcalTotalOpcoes = meal.opcoes.length;
+    return `
+    <article class="meal-card" data-meal-id="${meal.id}">
+      <div class="meal-card__head">
+        <div class="meal-card__title-group">
+          <span class="meal-index">Refeição ${idx + 1}</span>
+          <select class="meal-type-select" data-action="update-meal-tipo" data-meal-id="${meal.id}">
+            ${MEAL_TYPES.map(t => `<option value="${t.value}" ${t.value===meal.tipo?"selected":""}>${t.label}</option>`).join("")}
+          </select>
+        </div>
+        <div class="meal-card__meta">
+          <label class="time-field">
+            <span>Horário</span>
+            <input type="time" value="${escapeHtml(meal.horario)}" data-action="update-meal-horario" data-meal-id="${meal.id}">
+          </label>
+          <button class="icon-btn danger" type="button" data-action="remove-meal" data-meal-id="${meal.id}" title="Remover refeição" ${state.refeicoes.length<=1?"disabled":""}>✕</button>
+        </div>
+      </div>
+      <p class="meal-card__hint">O paciente poderá escolher entre as ${kcalTotalOpcoes} opção(ões) cadastradas abaixo para esta refeição.</p>
+
+      <div class="options-list">
+        ${meal.opcoes.map((opcao, oIdx) => renderOpcao(meal, opcao, oIdx)).join("")}
+      </div>
+
+      <button class="btn-add-option" type="button" data-action="add-opcao" data-meal-id="${meal.id}">+ Adicionar opção</button>
+    </article>`;
+  }
+
+  function renderOpcao(meal, opcao, oIdx){
+    return `
+    <div class="option-block" data-option-id="${opcao.id}">
+      <div class="option-block__head">
+        <span class="option-label">Opção ${oIdx + 1}</span>
+        ${meal.opcoes.length > 1 ? `<button class="icon-btn subtle" type="button" data-action="remove-opcao" data-meal-id="${meal.id}" data-option-id="${opcao.id}">Remover opção</button>` : ""}
+      </div>
+      <div class="food-rows">
+        ${opcao.alimentos.map(a => renderAlimentoRow(meal, opcao, a)).join("")}
+      </div>
+      <button class="btn-add-food" type="button" data-action="add-alimento" data-meal-id="${meal.id}" data-option-id="${opcao.id}">+ Adicionar alimento</button>
+    </div>`;
+  }
+
+  function renderAlimentoRow(meal, opcao, a){
+    const food = a.alimentoId ? FOOD_DB.find(f => f.id === a.alimentoId) : null;
+    let badge = "";
+    if (a.daTabela && food){
+      const kcalEstimado = Math.round(food.kcal * (Number(a.quantidade) || 0));
+      badge = `<span class="db-badge" title="Vinculado à tabela de alimentos">✓ tabela · ~${kcalEstimado} kcal</span>`;
+    } else if (!a.daTabela){
+      badge = `<span class="custom-badge" title="Item digitado livremente, sem vínculo com a tabela">livre</span>`;
+    }
+
+    return `
+    <div class="food-row" data-food-id="${a.id}">
+      <input class="qty-input" type="number" min="0" step="0.5" value="${a.quantidade}"
+             data-action="update-alimento-qtd" data-meal-id="${meal.id}" data-option-id="${opcao.id}" data-alimento-id="${a.id}"
+             aria-label="Quantidade">
+      <select class="unit-select" data-action="update-alimento-unidade" data-meal-id="${meal.id}" data-option-id="${opcao.id}" data-alimento-id="${a.id}" aria-label="Unidade">
+        ${UNITS.map(u => `<option value="${u}" ${u===a.unidade?"selected":""}>${u}</option>`).join("")}
+      </select>
+      <div class="food-name-wrap">
+        <input class="food-name-input" type="text" autocomplete="off" placeholder="Digite o alimento..."
+               value="${escapeHtml(a.nome)}"
+               data-action="input-alimento-nome" data-meal-id="${meal.id}" data-option-id="${opcao.id}" data-alimento-id="${a.id}"
+               aria-label="Nome do alimento">
+        ${badge}
+      </div>
+      <label class="toggle-db" title="Se marcado, o alimento é buscado na tabela nutricional. Se desmarcado, é um texto livre (ex: '1 fruta à escolha').">
+        <input type="checkbox" ${a.daTabela?"checked":""} data-action="toggle-da-tabela" data-meal-id="${meal.id}" data-option-id="${opcao.id}" data-alimento-id="${a.id}">
+        <span>Buscar na tabela</span>
+      </label>
+      <button class="icon-btn danger remove-food-btn" type="button" data-action="remove-alimento" data-meal-id="${meal.id}" data-option-id="${opcao.id}" data-alimento-id="${a.id}" title="Remover alimento">✕</button>
+    </div>`;
+  }
+
+  render();
+
+  /* =========================================================================
+     EVENTOS ESTRUTURAIS (adicionar/remover) — delegados por [data-action]
+  ========================================================================= */
+  mealsContainer.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-action]");
+    if (!btn) return;
+    const action = btn.dataset.action;
+    const mealId = btn.dataset.mealId;
+    const meal = mealId ? findMeal(mealId) : null;
+
+    if (action === "remove-meal" && meal){
+      if (state.refeicoes.length <= 1) return;
+      state.refeicoes = state.refeicoes.filter(r => r.id !== mealId);
+      render();
+    }
+    if (action === "add-opcao" && meal){
+      meal.opcoes.push(novaOpcao());
+      render();
+    }
+    if (action === "remove-opcao" && meal){
+      const opcao = findOpcao(meal, btn.dataset.optionId);
+      if (opcao && meal.opcoes.length > 1){
+        meal.opcoes = meal.opcoes.filter(o => o.id !== opcao.id);
+        render();
+      }
+    }
+    if (action === "add-alimento" && meal){
+      const opcao = findOpcao(meal, btn.dataset.optionId);
+      if (opcao){ opcao.alimentos.push(novoAlimento()); render(); }
+    }
+    if (action === "remove-alimento" && meal){
+      const opcao = findOpcao(meal, btn.dataset.optionId);
+      if (opcao && opcao.alimentos.length > 1){
+        opcao.alimentos = opcao.alimentos.filter(a => a.id !== btn.dataset.alimentoId);
+        render();
+      }
+    }
+  });
+
+  document.getElementById("addMealBtn").addEventListener("click", () => {
+    // Sugere um tipo de refeição ainda não usado, senão cai em "outro"
+    const usados = new Set(state.refeicoes.map(r => r.tipo));
+    const sugestao = MEAL_TYPES.find(t => !usados.has(t.value));
+    state.refeicoes.push(novaRefeicao(sugestao ? sugestao.value : "outro"));
+    render();
+    mealsContainer.lastElementChild?.scrollIntoView({behavior:"smooth", block:"center"});
+  });
+
+  /* =========================================================================
+     EVENTOS DE CAMPO (não recriam o DOM, só atualizam o estado)
+  ========================================================================= */
+  document.getElementById("pacienteInput").addEventListener("input", (e) => {
+    state.paciente = e.target.value;
+  });
+  document.getElementById("observacoesInput").addEventListener("input", (e) => {
+    state.observacoes = e.target.value;
+  });
+
+  mealsContainer.addEventListener("change", (e) => {
+    const el = e.target;
+    const action = el.dataset.action;
+    if (!action) return;
+    const meal = findMeal(el.dataset.mealId);
+    if (!meal) return;
+
+    if (action === "update-meal-tipo"){ meal.tipo = el.value; }
+    if (action === "update-meal-horario"){ meal.horario = el.value; }
+
+    const opcao = el.dataset.optionId ? findOpcao(meal, el.dataset.optionId) : null;
+    const alimento = opcao && el.dataset.alimentoId ? findAlimento(opcao, el.dataset.alimentoId) : null;
+
+    if (action === "update-alimento-unidade" && alimento){ alimento.unidade = el.value; render(); }
+    if (action === "toggle-da-tabela" && alimento){
+      alimento.daTabela = el.checked;
+      if (!el.checked) alimento.alimentoId = null;
+      render();
+    }
+  });
+
+  mealsContainer.addEventListener("input", (e) => {
+    const el = e.target;
+    const action = el.dataset.action;
+    if (!action) return;
+    const meal = findMeal(el.dataset.mealId);
+    if (!meal) return;
+    const opcao = el.dataset.optionId ? findOpcao(meal, el.dataset.optionId) : null;
+    const alimento = opcao && el.dataset.alimentoId ? findAlimento(opcao, el.dataset.alimentoId) : null;
+
+    if (action === "update-alimento-qtd" && alimento){
+      alimento.quantidade = el.value;
+      // Atualiza só o badge de kcal sem re-renderizar tudo (mantém o foco)
+      const badgeHolder = el.closest(".food-row").querySelector(".food-name-wrap");
+      const food = alimento.alimentoId ? FOOD_DB.find(f => f.id === alimento.alimentoId) : null;
+      const oldBadge = badgeHolder.querySelector(".db-badge, .custom-badge");
+      if (oldBadge && food && alimento.daTabela){
+        const kcalEstimado = Math.round(food.kcal * (Number(alimento.quantidade) || 0));
+        oldBadge.textContent = `✓ tabela · ~${kcalEstimado} kcal`;
+      }
+    }
+
+    if (action === "input-alimento-nome" && alimento){
+      alimento.nome = el.value;
+      alimento.alimentoId = null; // digitar de novo desvincula do item exato selecionado
+      const oldBadge = el.closest(".food-name-wrap").querySelector(".db-badge, .custom-badge");
+      if (oldBadge) oldBadge.remove();
+      if (alimento.daTabela){
+        showSuggestions(el, alimento);
+      } else {
+        hideSuggestions();
+      }
+    }
+  });
+
+  /* =========================================================================
+     AUTOCOMPLETE — busca na "tabela de alimentos"
+  ========================================================================= */
+  let suggestionsBox = document.createElement("div");
+  suggestionsBox.className = "suggestions";
+  document.body.appendChild(suggestionsBox);
+  let activeAlimentoRef = null; // {meal, opcao, alimento, inputEl}
+  let activeIndex = -1;
+  let currentMatches = [];
+
+  function showSuggestions(inputEl, alimento){
+    const termo = normalize(inputEl.value.trim());
+    currentMatches = termo.length === 0
+      ? FOOD_DB.slice(0, 8)
+      : FOOD_DB.filter(f => normalize(f.nome).includes(termo)).slice(0, 8);
+
+    activeAlimentoRef = { alimento, inputEl };
+    activeIndex = currentMatches.length ? 0 : -1;
+    renderSuggestions(inputEl);
+  }
+
+  function renderSuggestions(inputEl){
+    if (!currentMatches.length){
+      suggestionsBox.innerHTML = `<div class="suggestion-empty">Nenhum alimento encontrado na tabela. Desmarque "Buscar na tabela" para usar um texto livre.</div>`;
+    } else {
+      suggestionsBox.innerHTML = currentMatches.map((f, i) => `
+        <div class="suggestion-item ${i===activeIndex?"active":""}" data-food-index="${i}">
+          <span>${escapeHtml(f.nome)}</span>
+          <span class="kcal">${f.unidade} · ~${Math.round(f.kcal)} kcal</span>
+        </div>`).join("");
+    }
+    positionSuggestions(inputEl);
+    suggestionsBox.classList.add("show");
+  }
+
+  function positionSuggestions(inputEl){
+    const rect = inputEl.getBoundingClientRect();
+    suggestionsBox.style.left = (rect.left + window.scrollX) + "px";
+    suggestionsBox.style.top = (rect.bottom + window.scrollY + 4) + "px";
+    suggestionsBox.style.width = rect.width + "px";
+  }
+
+  function hideSuggestions(){
+    suggestionsBox.classList.remove("show");
+    activeAlimentoRef = null;
+    currentMatches = [];
+    activeIndex = -1;
+  }
+
+  function selectSuggestion(index){
+    if (!activeAlimentoRef || !currentMatches[index]) return;
+    const food = currentMatches[index];
+    const { alimento, inputEl } = activeAlimentoRef;
+    alimento.nome = food.nome;
+    alimento.alimentoId = food.id;
+    alimento.unidade = food.unidade;
+    hideSuggestions();
+    render();
+    // tenta manter o foco perto de onde o usuário estava
+    const row = mealsContainer.querySelector(`.food-row[data-food-id="${alimento.id}"]`);
+    row?.querySelector(".food-name-input")?.focus();
+  }
+
+  suggestionsBox.addEventListener("mousedown", (e) => {
+    const item = e.target.closest(".suggestion-item");
+    if (!item) return;
+    e.preventDefault();
+    selectSuggestion(Number(item.dataset.foodIndex));
+  });
+
+  mealsContainer.addEventListener("keydown", (e) => {
+    if (!e.target.matches(".food-name-input") || !suggestionsBox.classList.contains("show")) return;
+    if (e.key === "ArrowDown"){
+      e.preventDefault();
+      activeIndex = Math.min(activeIndex + 1, currentMatches.length - 1);
+      renderSuggestions(e.target);
+    } else if (e.key === "ArrowUp"){
+      e.preventDefault();
+      activeIndex = Math.max(activeIndex - 1, 0);
+      renderSuggestions(e.target);
+    } else if (e.key === "Enter"){
+      if (activeIndex >= 0){ e.preventDefault(); selectSuggestion(activeIndex); }
+    } else if (e.key === "Escape"){
+      hideSuggestions();
+    }
+  });
+
+  mealsContainer.addEventListener("focusin", (e) => {
+    if (!e.target.matches(".food-name-input")) return;
+    const el = e.target;
+    const meal = findMeal(el.dataset.mealId);
+    const opcao = meal && findOpcao(meal, el.dataset.optionId);
+    const alimento = opcao && findAlimento(opcao, el.dataset.alimentoId);
+    if (alimento && alimento.daTabela){ showSuggestions(el, alimento); }
+  });
+
+  document.addEventListener("mousedown", (e) => {
+    if (e.target.closest(".suggestions") || e.target.matches(".food-name-input")) return;
+    hideSuggestions();
+  });
+  window.addEventListener("resize", () => {
+    if (activeAlimentoRef) positionSuggestions(activeAlimentoRef.inputEl);
+  });
+  window.addEventListener("scroll", () => {
+    if (activeAlimentoRef) positionSuggestions(activeAlimentoRef.inputEl);
+  }, true);
+
+  /* =========================================================================
+     VALIDAÇÃO + PAYLOAD FINAL
+  ========================================================================= */
+  const banner = document.getElementById("banner");
+
+  function showBanner(msg, isSuccess){
+    banner.textContent = msg;
+    banner.classList.toggle("success", !!isSuccess);
+    banner.classList.add("show");
+    banner.scrollIntoView({behavior:"smooth", block:"center"});
+  }
+  function hideBanner(){ banner.classList.remove("show"); }
+
+  function validar(){
+    if (!state.paciente.trim()){
+      return "Informe o nome do paciente antes de salvar.";
+    }
+    for (const [i, meal] of state.refeicoes.entries()){
+      for (const [j, opcao] of meal.opcoes.entries()){
+        const semNome = opcao.alimentos.some(a => !a.nome.trim());
+        if (semNome){
+          return `Preencha o nome de todos os alimentos em "${mealLabel(meal.tipo)}" (Refeição ${i+1}, Opção ${j+1}).`;
+        }
+      }
+    }
+    return null;
+  }
+
+  function montarPayload(){
+    return {
+      paciente: state.paciente.trim(),
+      observacoesGerais: state.observacoes.trim() || null,
+      refeicoes: state.refeicoes.map(meal => ({
+        tipo: meal.tipo,
+        nomeExibicao: mealLabel(meal.tipo),
+        horario: meal.horario || null,
+        opcoes: meal.opcoes.map((opcao, i) => ({
+          nome: `Opção ${i + 1}`,
+          alimentos: opcao.alimentos.map(a => ({
+            quantidade: Number(a.quantidade) || 0,
+            unidade: a.unidade,
+            nome: a.nome.trim(),
+            alimentoId: a.daTabela ? a.alimentoId : null,
+            origem: a.daTabela ? "tabela_alimentos" : "personalizado",
+          })),
+        })),
+      })),
+    };
+  }
+
+  /* =========================================================================
+     MODAL / JSON DE SAÍDA
+     Em produção, o botão "Salvar plano alimentar" deve enviar este mesmo
+     objeto via fetch:
+       fetch('/api/planos-alimentares', {
+         method:'POST',
+         headers:{'Content-Type':'application/json'},
+         body: JSON.stringify(payload)
+       })
+  ========================================================================= */
+  const modalOverlay = document.getElementById("modalOverlay");
+  const jsonOutput = document.getElementById("jsonOutput");
+
+  function abrirModalComPayload(){
+    const payload = montarPayload();
+    jsonOutput.textContent = JSON.stringify(payload, null, 2);
+    modalOverlay.classList.add("show");
+  }
+  function fecharModal(){ modalOverlay.classList.remove("show"); }
+
+  document.getElementById("previewBtn").addEventListener("click", () => {
+    const erro = validar();
+    if (erro){ showBanner(erro, false); return; }
+    hideBanner();
+    abrirModalComPayload();
+  });
+
+  document.getElementById("saveBtn").addEventListener("click", () => {
+    const erro = validar();
+    if (erro){ showBanner(erro, false); return; }
+    // Ponto de integração real: enviar montarPayload() para o backend aqui.
+    showBanner("Plano alimentar pronto para ser salvo. Confira o JSON gerado abaixo.", true);
+    abrirModalComPayload();
+  });
+
+  document.getElementById("closeModalBtn").addEventListener("click", fecharModal);
+  modalOverlay.addEventListener("click", (e) => { if (e.target === modalOverlay) fecharModal(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") fecharModal(); });
+
+  document.getElementById("copyJsonBtn").addEventListener("click", async () => {
+    try{
+      await navigator.clipboard.writeText(jsonOutput.textContent);
+      const btn = document.getElementById("copyJsonBtn");
+      const original = btn.textContent;
+      btn.textContent = "Copiado!";
+      setTimeout(() => { btn.textContent = original; }, 1500);
+    } catch(err){
+      alert("Não foi possível copiar automaticamente. Selecione o texto manualmente.");
+    }
+  });
+
+})();
+</script>
+</body>
+</html>

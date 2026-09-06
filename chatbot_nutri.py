@@ -1,7 +1,6 @@
 import os
 import json
 import re
-import math
 import pandas as pd
 from rapidfuzz import process
 import uuid
@@ -9,7 +8,17 @@ from unidecode import unidecode
 from datetime import datetime, date
 from typing import List, Dict, Any, Optional, Tuple
 from supabase import create_async_client, AsyncClient
-import google.generativeai as genai
+from dotenv import load_dotenv
+import httpx  # cliente HTTP assíncrono, já vem com fastapi[standard]
+import numpy as np   # adicionar no topo, junto dos outros imports
+
+
+load_dotenv()
+HF_TOKEN = os.environ.get("HF_TOKEN", "")
+HF_MODEL_FALLBACK = "meta-llama/Llama-3.3-70B-Instruct"  # troque pelo modelo que preferir
+HF_ROUTER_URL = "https://router.huggingface.co/v1/chat/completions"
+
+
 
 try:
     from sentence_transformers import SentenceTransformer, util
@@ -20,9 +29,9 @@ except Exception as e:
 MODELO_EMBEDDING = "paraphrase-multilingual-MiniLM-L12-v2"
 MODELO_IA = None
 DF_ALIMENTOS = None
-INTENCOES_EMBED = {}
+INTENCOES_EMBED: Dict[str, Any] = {}
 
-supabase: Optional[AsyncClient] = None
+supabase: AsyncClient = None  # type: ignore
 
 FATORES_ATIVIDADE = {
     "sedentario": 1.2,
@@ -86,13 +95,9 @@ async def init_db():
         print("Supabase client initialized.")
     else:
         print("AVISO: Variáveis de ambiente SUPABASE_URL e SUPABASE_KEY não configuradas.")
-        
-    gemini_key = os.environ.get("GEMINI_API_KEY", "")
-    if gemini_key:
-        genai.configure(api_key=gemini_key)
-        print("Gemini configurado com sucesso.")
-    else:
-        print("AVISO: GEMINI_API_KEY não configurada. Respostas serão baseadas no cálculo apenas.")
+
+    if not HF_TOKEN:
+        print("AVISO: HF_TOKEN não configurada. O fallback de IA generativa ficará desativado.")
 
 def gerar_id() -> str:
     return str(uuid.uuid4())
@@ -102,7 +107,7 @@ def normalizar_texto(txt: str) -> str:
         return ""
     return re.sub(r'\s+', ' ', txt.strip().lower())
 
-async def criar_nutricionista(nome: str, email: str, senha: str) -> str:
+async def criar_nutricionista(nome: str, email: str, senha: str) -> Optional[str]:
     idn = gerar_id()
     try:
         data = {
@@ -112,13 +117,14 @@ async def criar_nutricionista(nome: str, email: str, senha: str) -> str:
             "senha": senha,
             "criado_em": datetime.utcnow().isoformat()
         }
+        assert supabase is not None
         await supabase.table("nutricionistas").insert(data).execute()
         return idn
     except Exception as e:
         print(f"Erro ao criar nutricionista: {e}")
         return None 
 
-async def criar_cliente(id_nutri: str, nome: str, email: str, senha: str, idade: int, sexo: str, peso_kg: float, altura_cm: float, atividade: str="sedentario") -> str:
+async def criar_cliente(id_nutri: str, nome: str, email: str, senha: str, idade: int, sexo: str, peso_kg: float, altura_cm: float, atividade: str="sedentario") -> Optional[str]:
     idc = gerar_id()
     try:
         data = {
@@ -397,7 +403,7 @@ async def _encontrar_item_por_nome_por_embedding(id_cliente: str, texto_item: st
             else:
                 vec_list = vec_data
 
-            vec = pd.np.array(vec_list, dtype=pd.np.float32) 
+            vec = np.array(vec_list, dtype=np.float32)
             sim = float(util.cos_sim(emb_texto, vec))
             
             if sim > melhor_sim:
@@ -422,12 +428,15 @@ async def _encontrar_item_por_nome_por_embedding(id_cliente: str, texto_item: st
         
     return None
 
-def calcular_bmr(peso_kg: float, altura_cm: float, idade: int, sexo: str) -> float:
-    s = sexo.lower()[0] if sexo else "f"
+def calcular_bmr(peso_kg: Optional[float], altura_cm: Optional[float], idade: Optional[int], sexo: Optional[str]) -> float:
+    peso = float(peso_kg or 0)
+    altura = float(altura_cm or 0)
+    idade_int = int(idade or 0)
+    s = (sexo or "f").lower()[0]
     if s in ("f", "m") and s == "f":
-        return 10 * peso_kg + 6.25 * altura_cm - 5 * idade - 161
+        return 10 * peso + 6.25 * altura - 5 * idade_int - 161
     else:
-        return 10 * peso_kg + 6.25 * altura_cm - 5 * idade + 5
+        return 10 * peso + 6.25 * altura - 5 * idade_int + 5
 
 def calcular_tdee(bmr: float, atividade: str) -> float:
     fator = FATORES_ATIVIDADE.get(atividade, FATORES_ATIVIDADE["sedentario"])
@@ -436,16 +445,18 @@ def calcular_tdee(bmr: float, atividade: str) -> float:
 def recomendacao_agua_ml(peso_kg: float) -> float:
     return peso_kg * 35
 
-def calcular_imc(peso_kg: float, altura_cm: float) -> Optional[float]:
+def calcular_imc(peso_kg: Optional[float], altura_cm: Optional[float]) -> Optional[float]:
     try:
-        altura_m = float(altura_cm) / 100.0
+        peso = float(peso_kg or 0)
+        altura = float(altura_cm or 0)
+        altura_m = altura / 100.0
         if altura_m <= 0:
             return None
-        return peso_kg / (altura_m * altura_m)
+        return peso / (altura_m * altura_m)
     except Exception:
         return None
 
-def classificar_imc(imc: float) -> str:
+def classificar_imc(imc: Optional[float]) -> str:
     if imc is None:
         return "IMC não calculável"
     if imc < 18.5:
@@ -769,12 +780,12 @@ async def gerar_relatorio_completo_cliente(id_cliente: str) -> str:
 
     return "\n".join(linhas)
 
-async def _gerar_contexto_calculado(id_cliente: str, texto: str) -> str:
+async def _gerar_contexto_calculado(id_cliente: str, texto: str) -> Tuple[str, bool]:
     texto_lower = texto.lower().strip()
     
     if re.search(r'(forne(c|ç)a|me dê|me de|me mande|)\s+(todas as informa(c|ç)oes|meu resumo|meu relatório)', texto_lower):
         resposta = await gerar_relatorio_completo_cliente(id_cliente)
-        return resposta
+        return resposta, True
 
     m_peso = re.search(r'\b(?:meu\s+)?peso\s*(?:é|=)?\s*(\d+(?:[.,]\d+)?)\s*(kg)?\b', texto_lower)
     if m_peso:
@@ -783,7 +794,7 @@ async def _gerar_contexto_calculado(id_cliente: str, texto: str) -> str:
             resposta = f"Entendido! Atualizei seu peso para <b>{peso_novo:.1f} kg</b>. Vou usar esse valor para recalcular suas metas de calorias e água. 👍"
         else:
             resposta = "Erro ao atualizar peso. Peça para a nutricionista atualizar manualmente."
-        return resposta
+        return resposta, True
 
     if any(w in texto_lower for w in ["água", "agua", "quanta água", "quanta agua"]):
         cliente = await get_cliente_por_id(id_cliente)
@@ -792,23 +803,28 @@ async def _gerar_contexto_calculado(id_cliente: str, texto: str) -> str:
             resposta = f"Com base no seu peso, a sugestão de ingestão de água é de <b>~{int(ml)} ml/dia</b> (cerca de {ml/1000:.2f} L). Mantenha-se hidratado! 💧"
         else:
             resposta = "Não tenho seu peso cadastrado. Peça para a nutricionista cadastrar ou escreva 'Meu peso 72kg' para atualizar."
-        return resposta
+        return resposta, True
 
     chave_intencao, sim = interpretar_intencao(texto_lower)
     
     if chave_intencao == "saudacoes" and sim > 0.5:
-        return await saudacoes_cliente(id_cliente) 
+        resposta = await saudacoes_cliente(id_cliente)
+        return resposta, True
     if chave_intencao == "perguntar_opcoes_cafe" and sim > 0.5:
-        return await recomendar_opcoes_refeicao(id_cliente, "cafe da manha") 
+        resposta = await recomendar_opcoes_refeicao(id_cliente, "cafe da manha")
+        return resposta, True
     if chave_intencao == "perguntar_opcoes_almoco" and sim > 0.5:
-        return await recomendar_opcoes_refeicao(id_cliente, "almoco") 
+        resposta = await recomendar_opcoes_refeicao(id_cliente, "almoco")
+        return resposta, True
     if chave_intencao == "perguntar_opcoes_janta" and sim > 0.5:
-        return await recomendar_opcoes_refeicao(id_cliente, "janta") 
+        resposta = await recomendar_opcoes_refeicao(id_cliente, "janta")
+        return resposta, True
     if chave_intencao == "calorias_disponiveis" and sim > 0.5:
-        return await recomendar_para_restante(id_cliente) 
+        resposta = await recomendar_para_restante(id_cliente)
+        return resposta, True
     if chave_intencao == "mostrar_info" and sim > 0.5:
         resposta = await mostrar_informacoes_cliente(id_cliente)
-        return resposta
+        return resposta, True
 
     if "comi" in texto_lower or "comemos" in texto_lower or "comeu" in texto_lower or "registrei" in texto_lower or "anota aí" in texto_lower:
         refeicao_encontrada = "refeicao" 
@@ -819,7 +835,9 @@ async def _gerar_contexto_calculado(id_cliente: str, texto: str) -> str:
         
         pares = extrair_itens_e_gramas(texto_lower)
         if not pares:
-            resposta = "Não entendi o que você comeu. 😅 Para eu registrar, tente dizer o alimento e a quantidade, por exemplo: 'Comi 100g de arroz e 150g de frango no almoço'."
+            # Aqui o sistema de regras não conseguiu extrair o que foi comido —
+            # deixa a LLM tentar interpretar em vez de devolver mensagem fixa
+            return "", False
         else:
             mensagens = []
             for nome_item, gramas in pares:
@@ -827,8 +845,7 @@ async def _gerar_contexto_calculado(id_cliente: str, texto: str) -> str:
                 if registro:
                     mensagens.append(f"Anotado! ✅ <b>{registro['nome_item']}</b> ({registro['gramas']}g) com ~{registro['kcal']:.0f} kcal.")
             resposta = "\n".join(mensagens)
-        
-        return resposta
+        return resposta, True
 
     if any(k in texto_lower for k in ["quanto isso", "quantas calorias", "quantas kcal", "quanto tem"]):
         ultima = await ultima_resposta_contexto(id_cliente)
@@ -841,77 +858,105 @@ async def _gerar_contexto_calculado(id_cliente: str, texto: str) -> str:
                 resposta = f"A última opção que mencionei tem <b>~{float(m.group(1)):.0f} kcal</b> (a cada 100g, geralmente)."
             else:
                 resposta = "Não consegui inferir as calorias da mensagem anterior."
-        
-        return resposta
+        return resposta, True
 
     match = await procurar_item_por_texto_no_plano(id_cliente, texto_lower)
     if match:
         p = match["per_100g"]
         resposta = f"Encontrei <b>{match['nome']}</b> no seu plano! Aqui estão os detalhes (para 100g):\n• <b>Calorias:</b> {p['cal']:.0f} kcal\n• <b>Proteínas:</b> {p.get('prot',0):.1f}g\n• <b>Carboidratos:</b> {p.get('carb',0):.1f}g\n• <b>Gorduras:</b> {p.get('fat',0):.1f}g"
-    else:
-        resposta = "Desculpe, não consegui entender. 😅 Você pode tentar perguntar de outra forma? Lembre-se que eu funciono melhor com perguntas como 'O que posso jantar?' ou 'Comi 150g de frango'."
-    
-    return resposta
+        return resposta, True
 
-async def responder_pergunta(id_cliente: str, texto: str) -> str:
-    # 1. Salvar a mensagem do usuário
-    await _salvar_conversa(id_cliente, "user", texto)
-    
-    # 2. Obter o texto lógico puramente calculado pelo RAG interno
-    contexto_calculado = await _gerar_contexto_calculado(id_cliente, texto)
-    
-    # 3. Preparar contexto do LLM
+    # Nada do sistema de intenções/regras bateu — sinaliza pro caller cair na LLM
+    return "", False
+
+async def chamar_llm_fallback(id_cliente: str, pergunta_usuario: str) -> str:
+    """
+    Só é chamada quando o sistema de intenções não reconheceu a pergunta.
+    """
+    if not HF_TOKEN:
+        return "Desculpe, não consegui entender sua pergunta. 😅 Tente reformular ou fale com sua nutricionista."
+
     cliente = await get_cliente_por_id(id_cliente)
+    if not cliente:
+        return "Cliente não encontrado."
+
     persona = "Um(a) assistente amigável e focado(a) na saúde."
     restricoes = "Não dar diagnósticos médicos."
-    
-    if cliente and cliente.get("id_nutri"):
+
+    if cliente.get("id_nutri"):
         config = await get_bot_config(cliente["id_nutri"])
         if config:
             persona = config.get("bot_persona") or persona
             restricoes = config.get("bot_restricoes") or restricoes
-            
-    # Sobrepor as restrições individuais do paciente, se houver
-    if cliente and cliente.get("ia_persona"):
-        persona = cliente.get("ia_persona")
-    
-    if cliente and cliente.get("ia_restricoes"):
-        restricoes = restricoes + "\n\nRESTRIÇÕES ESPECÍFICAS DESTE PACIENTE:\n" + cliente.get("ia_restricoes")
 
-    gemini_key = os.environ.get("GEMINI_API_KEY")
-    if not gemini_key:
-        print("Fallback: GEMINI_API_KEY ausente. Retornando texto calculado cru.")
-        resposta_final = contexto_calculado
-    else:
-        try:
-            model = genai.GenerativeModel("gemini-pro") # Modelo padrão e amplamente compatível
-            prompt = f"""Você é o nutricionista deste paciente (cliente). Aja de forma empática, natural e humana.
-Sua persona: {persona}
-Suas restrições/instruções extras: {restricoes}
+    if cliente.get("ia_persona"):
+        persona = cliente["ia_persona"]
+    if cliente.get("ia_restricoes"):
+        restricoes += "\n\nRESTRIÇÕES ESPECÍFICAS DESTE PACIENTE:\n" + cliente["ia_restricoes"]
 
-O paciente acabou de falar a seguinte mensagem: "{texto}"
+    plano = await listar_plano(id_cliente)
+    resumo_plano = [
+        f"{refeicao}: " + ", ".join(it["nome"] for it in itens)
+        for refeicao, itens in plano.items()
+    ]
+    resumo_plano_txt = "\n".join(resumo_plano) if resumo_plano else "Plano ainda não cadastrado."
 
-O nosso sistema já rodou a lógica interna e extraiu os seguintes DADOS E CÁLCULOS EXATOS:
---- INÍCIO DOS CÁLCULOS DO SISTEMA ---
-{contexto_calculado}
---- FIM DOS CÁLCULOS DO SISTEMA ---
+    consumo_hoje, _ = await consumo_total_hoje(id_cliente)
 
-REGRAS ESTABELECIDAS:
-1. Responda ao paciente baseando-se EXCLUSIVAMENTE nos dados fornecidos nos "CÁLCULOS DO SISTEMA". Você é apenas a "voz" da resposta.
-2. É ESTRITAMENTE PROIBIDO inventar valores calóricos, pesos, ou alimentos. Se o cálculo disse que a comida tem X calorias, use esse valor.
-3. Se os cálculos disserem que não há opções, que faltam dados, ou que não entendeu, responda de acordo e de forma amigável.
-4. Você pode formatar o texto (usar negrito, quebras de linha e emojis).
-5. Fale diretamente com o paciente. Nunca mencione que você recebeu "cálculos do sistema" ou que você é uma IA.
+    system_prompt = f"""Você é um assistente de nutrição chamado OTRI, integrado ao app de uma nutricionista.
+
+Persona definida pela nutricionista: {persona}
+Restrições que você DEVE seguir: {restricoes}
+
+Regras gerais:
+- Nunca dê diagnósticos médicos.
+- Nunca invente informações do plano do cliente; use só o que está listado abaixo.
+- Se não souber algo, diga que a nutricionista precisa ser consultada.
+- Responda em português, de forma curta e direta (2-4 frases), no mesmo tom da persona.
+
+Dados do cliente:
+- Nome: {cliente.get('nome')}
+- Meta: {cliente.get('meta') or 'não definida'}
+- Consumo calórico hoje: {consumo_hoje:.0f} kcal
+
+Plano alimentar cadastrado:
+{resumo_plano_txt}
 """
-            response = model.generate_content(prompt)
-            resposta_final = response.text.strip()
-        except Exception as e:
-            print(f"Erro ao gerar resposta com Gemini: {e}")
-            resposta_final = contexto_calculado
 
-    # 4. Salvar a resposta final gerada e retorná-la
-    await _salvar_conversa(id_cliente, "bot", resposta_final)
-    return resposta_final
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.post(
+                HF_ROUTER_URL,
+                headers={"Authorization": f"Bearer {HF_TOKEN}"},
+                json={
+                    "model": HF_MODEL_FALLBACK,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": pergunta_usuario},
+                    ],
+                    "max_tokens": 300,
+                    "temperature": 0.6,
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            resposta = data["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        print(f"[HF LLM] Erro ao chamar fallback: {e}")
+        resposta = "Desculpe, não consegui entender sua pergunta agora. 😅 Tente reformular ou fale com sua nutricionista."
+
+    return resposta
+
+async def responder_pergunta(id_cliente: str, texto: str) -> str:
+    await _salvar_conversa(id_cliente, "user", texto)
+
+    resposta, entendeu = await _gerar_contexto_calculado(id_cliente, texto)
+
+    if not entendeu:
+        resposta = await chamar_llm_fallback(id_cliente, texto)
+
+    await _salvar_conversa(id_cliente, "bot", resposta)
+    return resposta
 
 def buscar_alimento_base_dados(nome_alimento: str) -> List[Dict[str, Any]]:
     if DF_ALIMENTOS is None:

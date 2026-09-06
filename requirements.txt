@@ -10,3 +10,5 @@ openpyxl
 supabase
 python-dotenv
 google-generativeai
+huggingface_hub
+requests

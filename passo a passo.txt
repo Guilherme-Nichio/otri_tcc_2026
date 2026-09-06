@@ -1,4 +1,8 @@
 python -m venv venv ( se ainda nao tiver criado )
 .\venv\Scripts\Activate.ps1
+
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\venv\Scripts\Activate.ps1 (caso n estiver indo)
+
 pip install -r requirements.txt
 uvicorn api:app --reload

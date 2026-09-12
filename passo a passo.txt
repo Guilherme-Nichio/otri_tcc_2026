@@ -6,3 +6,8 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
 pip install -r requirements.txt
 uvicorn api:app --reload
+
+
+acessar o front:
+cd frontend
+npm run dev

@@ -780,6 +780,43 @@ async def gerar_relatorio_completo_cliente(id_cliente: str) -> str:
 
     return "\n".join(linhas)
 
+def encontrar_similares(alimento_alvo: Dict[str, Any], n: int = 2) -> List[Dict[str, Any]]:
+    if DF_ALIMENTOS is None or DF_ALIMENTOS.empty:
+        return []
+    
+    cal_alvo = alimento_alvo.get('energia_kcal', 0)
+    prot_alvo = alimento_alvo.get('proteina_g', 0)
+    carb_alvo = alimento_alvo.get('carboidrato_g', 0)
+    lip_alvo = alimento_alvo.get('lipideo_g', 0)
+    
+    cal_alvo = float(cal_alvo) if pd.notna(cal_alvo) else 0.0
+    prot_alvo = float(prot_alvo) if pd.notna(prot_alvo) else 0.0
+    carb_alvo = float(carb_alvo) if pd.notna(carb_alvo) else 0.0
+    lip_alvo = float(lip_alvo) if pd.notna(lip_alvo) else 0.0
+    
+    df = DF_ALIMENTOS.copy()
+    nome_alvo = alimento_alvo.get('descricao_alimento', '')
+    df = df[df['descricao_alimento'] != nome_alvo]
+    
+    df['energia_kcal'] = pd.to_numeric(df['energia_kcal'], errors='coerce').fillna(0)
+    df['proteina_g'] = pd.to_numeric(df['proteina_g'], errors='coerce').fillna(0)
+    df['carboidrato_g'] = pd.to_numeric(df['carboidrato_g'], errors='coerce').fillna(0)
+    df['lipideo_g'] = pd.to_numeric(df['lipideo_g'], errors='coerce').fillna(0)
+    
+    df['dist'] = (abs(df['energia_kcal'] - cal_alvo) + 
+                  abs(df['proteina_g'] - prot_alvo) * 4 + 
+                  abs(df['carboidrato_g'] - carb_alvo) * 4 + 
+                  abs(df['lipideo_g'] - lip_alvo) * 9)
+                  
+    df_sorted = df.sort_values('dist')
+    
+    similares = []
+    for _, row in df_sorted.head(n).iterrows():
+        alimento_limpo = {k: (v if pd.notna(v) else None) for k, v in row.to_dict().items() if k != 'dist'}
+        similares.append(alimento_limpo)
+        
+    return similares
+
 async def _gerar_contexto_calculado(id_cliente: str, texto: str) -> Tuple[str, bool]:
     texto_lower = texto.lower().strip()
     
@@ -804,6 +841,22 @@ async def _gerar_contexto_calculado(id_cliente: str, texto: str) -> Tuple[str, b
         else:
             resposta = "Não tenho seu peso cadastrado. Peça para a nutricionista cadastrar ou escreva 'Meu peso 72kg' para atualizar."
         return resposta, True
+
+    m_troca = re.search(r'(?:trocar|substituir|outra op(?:c|ç)(?:a|ã)o para|em vez d[eo])\s+(?:o|a|meu|minha)?\s*([a-zA-ZÀ-ú0-9\s]+)', texto_lower)
+    if m_troca:
+        alimento_busca = m_troca.group(1).strip()
+        matches = buscar_alimento_base_dados(alimento_busca)
+        if matches:
+            alvo = matches[0]
+            similares = encontrar_similares(alvo, n=2)
+            if similares:
+                linhas = [f"Vi que você quer opções para substituir <b>{alvo['descricao_alimento']}</b>."]
+                linhas.append("Aqui estão opções com perfil nutricional parecido:")
+                for sim in similares:
+                    linhas.append(f"• <b>{sim['descricao_alimento']}</b> (Cal: {float(sim.get('energia_kcal', 0)):.0f} kcal, Prot: {float(sim.get('proteina_g', 0)):.1f}g, Carb: {float(sim.get('carboidrato_g', 0)):.1f}g, Gord: {float(sim.get('lipideo_g', 0)):.1f}g)")
+                linhas.append("\n⚠️ <b>Aviso:</b> Lembre-se que alterações na dieta não devem ser feitas apenas substituindo alimentos por conta própria dessa maneira. Por favor, entre em contato com a sua nutricionista para que ela altere o plano adequadamente e de acordo com o seu gosto e objetivos!")
+                resposta = "\n".join(linhas)
+                return resposta, True
 
     chave_intencao, sim = interpretar_intencao(texto_lower)
     
@@ -869,15 +922,20 @@ async def _gerar_contexto_calculado(id_cliente: str, texto: str) -> Tuple[str, b
     # Nada do sistema de intenções/regras bateu — sinaliza pro caller cair na LLM
     return "", False
 
-async def chamar_llm_fallback(id_cliente: str, pergunta_usuario: str) -> str:
+async def chamar_llm_com_contexto(id_cliente: str, pergunta_usuario: str, resposta_base: str = "") -> str:
     """
-    Só é chamada quando o sistema de intenções não reconheceu a pergunta.
+    Trabalha em conjunto com o sistema de intenções para gerar uma resposta final
+    personalizada e correta.
     """
     if not HF_TOKEN:
+        if resposta_base:
+            return resposta_base
         return "Desculpe, não consegui entender sua pergunta. 😅 Tente reformular ou fale com sua nutricionista."
 
     cliente = await get_cliente_por_id(id_cliente)
     if not cliente:
+        if resposta_base:
+            return resposta_base
         return "Cliente não encontrado."
 
     persona = "Um(a) assistente amigável e focado(a) na saúde."
@@ -912,8 +970,21 @@ Regras gerais:
 - Nunca dê diagnósticos médicos.
 - Nunca invente informações do plano do cliente; use só o que está listado abaixo.
 - Se não souber algo, diga que a nutricionista precisa ser consultada.
-- Responda em português, de forma curta e direta (2-4 frases), no mesmo tom da persona.
+- Responda em português, de forma amigável e direta (2-4 frases), no mesmo tom da persona.
+"""
+    if resposta_base:
+        system_prompt += f"""
+- O sistema gerou a seguinte "Resposta Base": {resposta_base}
+- Você DEVE usar as informações dessa resposta base como corretas, pois vêm do banco de dados ou das intenções mapeadas.
+- Reescreva a resposta base para deixá-la mais personalizada e amigável para o usuário, no tom da sua persona.
+- Se a resposta base parecer correta para a pergunta do usuário, apenas melhore a sua apresentação.
+"""
+    else:
+        system_prompt += """
+- Não há uma resposta base. Responda à pergunta do usuário considerando as restrições e o contexto abaixo.
+"""
 
+    system_prompt += f"""
 Dados do cliente:
 - Nome: {cliente.get('nome')}
 - Meta: {cliente.get('meta') or 'não definida'}
@@ -935,7 +1006,7 @@ Plano alimentar cadastrado:
                         {"role": "user", "content": pergunta_usuario},
                     ],
                     "max_tokens": 300,
-                    "temperature": 0.6,
+                    "temperature": 0.7,
                 },
             )
             resp.raise_for_status()
@@ -943,20 +1014,20 @@ Plano alimentar cadastrado:
             resposta = data["choices"][0]["message"]["content"].strip()
     except Exception as e:
         print(f"[HF LLM] Erro ao chamar fallback: {e}")
-        resposta = "Desculpe, não consegui entender sua pergunta agora. 😅 Tente reformular ou fale com sua nutricionista."
+        resposta = resposta_base if resposta_base else "Desculpe, não consegui entender sua pergunta agora. 😅 Tente reformular ou fale com sua nutricionista."
 
     return resposta
 
 async def responder_pergunta(id_cliente: str, texto: str) -> str:
     await _salvar_conversa(id_cliente, "user", texto)
 
-    resposta, entendeu = await _gerar_contexto_calculado(id_cliente, texto)
+    resposta_base, entendeu = await _gerar_contexto_calculado(id_cliente, texto)
 
-    if not entendeu:
-        resposta = await chamar_llm_fallback(id_cliente, texto)
+    # A LLM atuará sempre para personalizar a resposta base ou gerar uma nova se não foi entendida.
+    resposta_final = await chamar_llm_com_contexto(id_cliente, texto, resposta_base if entendeu else "")
 
-    await _salvar_conversa(id_cliente, "bot", resposta)
-    return resposta
+    await _salvar_conversa(id_cliente, "bot", resposta_final)
+    return resposta_final
 
 def buscar_alimento_base_dados(nome_alimento: str) -> List[Dict[str, Any]]:
     if DF_ALIMENTOS is None:

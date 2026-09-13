@@ -10,4 +10,5 @@ uvicorn api:app --reload
 
 acessar o front:
 cd frontend
+npm install
 npm run dev

@@ -9,6 +9,7 @@ import {
   FileText, ShieldAlert, CheckCircle2, Clock
 } from "lucide-react";
 import axios from "axios";
+import PlanoAlimentarForm from "./PlanoAlimentarForm";
 
 // Tipos
 type Cliente = {
@@ -17,6 +18,8 @@ type Cliente = {
   email: string;
   peso_kg: number;
   altura_cm: number;
+  idade?: number;
+  sexo?: string;
   meta: string;
   ativo: boolean;
   anamnese: any;
@@ -451,40 +454,14 @@ export default function DashboardNutri() {
 
                         {/* PLANO ALIMENTAR */}
                         {clientTab === "plano" && (
-                          <div className="space-y-8">
-                            <div className="bg-blue-50 border border-blue-100 p-5 rounded-2xl">
-                              <h4 className="font-bold text-blue-900 mb-4 flex items-center gap-2"><Plus className="w-4 h-4" /> Novo Alimento (IA calcula via Embedding)</h4>
-                              <form onSubmit={adicionarItemAoPlano} className="grid grid-cols-2 gap-3">
-                                <select required value={novoItem.refeicao} onChange={e => setNovoItem({...novoItem, refeicao: e.target.value})} className="col-span-2 md:col-span-1 p-2.5 rounded-lg border border-blue-200 bg-white outline-none">
-                                  <option value="cafe da manha">Café da Manhã</option><option value="almoco">Almoço</option><option value="lanche da tarde">Lanche</option><option value="janta">Jantar</option><option value="ceia">Ceia</option>
-                                </select>
-                                <input required type="text" placeholder="Nome (ex: Aveia)" value={novoItem.nome_alimento} onChange={e => setNovoItem({...novoItem, nome_alimento: e.target.value})} className="col-span-2 md:col-span-1 p-2.5 rounded-lg border border-blue-200 bg-white outline-none"/>
-                                <input required type="number" step="0.1" placeholder="Kcal/100g" value={novoItem.cal_100g} onChange={e => setNovoItem({...novoItem, cal_100g: e.target.value})} className="p-2.5 rounded-lg border border-blue-200 bg-white outline-none"/>
-                                <button type="submit" disabled={addingItem} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-lg flex items-center justify-center transition-colors disabled:opacity-50">
-                                  {addingItem ? <Loader2 className="w-4 h-4 animate-spin" /> : "Adicionar"}
-                                </button>
-                              </form>
-                            </div>
-
-                            {planoAtual && Object.keys(planoAtual).length > 0 ? (
-                              <div className="space-y-4">
-                                {Object.entries(planoAtual).map(([ref, itens]) => (
-                                  <div key={ref} className="border border-slate-200 rounded-xl overflow-hidden">
-                                    <div className="bg-slate-50 px-4 py-2 border-b border-slate-200 font-bold text-slate-700 uppercase text-xs tracking-wider">{ref}</div>
-                                    <div className="p-2 space-y-1">
-                                      {itens.map(it => (
-                                        <div key={it.id} className="flex justify-between items-center bg-white px-3 py-2 rounded text-sm hover:bg-slate-50">
-                                          <span className="font-medium text-slate-800">{it.nome}</span>
-                                          <span className="font-bold text-emerald-600">{it.per_100g.cal} kcal/100g</span>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            ) : (
-                              <p className="text-center text-slate-500 py-6">O plano está vazio.</p>
-                            )}
+                          <div className="space-y-4">
+                            <PlanoAlimentarForm
+                              initialPaciente={clienteSelecionado.nome}
+                              readOnlyPacienteField={true}
+                              onSavePayload={async (payload) => {
+                                console.log("Salvando plano para o cliente", clienteSelecionado.id_cliente, payload);
+                              }}
+                            />
                           </div>
                         )}
 

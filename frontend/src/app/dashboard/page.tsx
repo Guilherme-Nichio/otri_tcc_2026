@@ -49,9 +49,12 @@ export default function DashboardNutri() {
   const [clienteSelecionado, setClienteSelecionado] = useState<Cliente | null>(null);
   
   // Cliente Sub-Tabs
-  const [clientTab, setClientTab] = useState<"overview" | "plano" | "prontuario" | "ia">("overview");
+  const [clientTab, setClientTab] = useState<"overview" | "plano" | "prontuario" | "ia" | "chat">("overview");
   const [planoAtual, setPlanoAtual] = useState<Plano | null>(null);
-  const [monitoramento, setMonitoramento] = useState({ ultima_mensagem: null, ultimo_registro: null });
+  const [monitoramento, setMonitoramento] = useState<any>({ ultima_mensagem: null, ultimo_registro: null });
+  const [chatHistorico, setChatHistorico] = useState<any[]>([]);
+  const [nutriMensagem, setNutriMensagem] = useState("");
+  const [sendingMsg, setSendingMsg] = useState(false);
 
   // Bot Global Config
   const [botConfig, setBotConfig] = useState({ persona: "", restricoes: "", cor: "#10b981" });
@@ -128,10 +131,32 @@ export default function DashboardNutri() {
         persona: clienteCompleto.ia_persona || "",
         restricoes: clienteCompleto.ia_restricoes || ""
       });
+      fetchChat(c_short.id_cliente);
     } catch (err) {
       console.error(err);
     }
   };
+
+  const fetchChat = async (id: string) => {
+    try {
+      const res = await axios.get(`http://localhost:8000/api/chat/${id}/historico`);
+      setChatHistorico(res.data || []);
+    } catch (err) {}
+  };
+
+  const enviarMensagemNutri = async () => {
+    if(!nutriMensagem.trim() || !clienteSelecionado) return;
+    setSendingMsg(true);
+    try {
+      await axios.post(`http://localhost:8000/api/chat/${clienteSelecionado.id_cliente}/nutri`, { texto: nutriMensagem });
+      setNutriMensagem("");
+      fetchChat(clienteSelecionado.id_cliente);
+    } catch (err) {
+      console.error(err);
+    }
+    setSendingMsg(false);
+  };
+
 
   const criarPaciente = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -399,6 +424,7 @@ export default function DashboardNutri() {
                         <button onClick={() => setClientTab("prontuario")} className={`py-4 px-4 font-semibold text-sm border-b-2 transition-colors ${clientTab === "prontuario" ? "border-emerald-500 text-emerald-700" : "border-transparent text-slate-500 hover:text-slate-700"}`}>Prontuário</button>
                         <button onClick={() => setClientTab("plano")} className={`py-4 px-4 font-semibold text-sm border-b-2 transition-colors ${clientTab === "plano" ? "border-emerald-500 text-emerald-700" : "border-transparent text-slate-500 hover:text-slate-700"}`}>Plano Alimentar</button>
                         <button onClick={() => setClientTab("ia")} className={`py-4 px-4 font-semibold text-sm border-b-2 transition-colors ${clientTab === "ia" ? "border-purple-500 text-purple-700" : "border-transparent text-slate-500 hover:text-slate-700"}`}>IA Customizada</button>
+                        <button onClick={() => setClientTab("chat")} className={`py-4 px-4 font-semibold text-sm border-b-2 transition-colors ${clientTab === "chat" ? "border-blue-500 text-blue-700" : "border-transparent text-slate-500 hover:text-slate-700"}`}>Monitorar Chat</button>
                       </div>
 
                       {/* Conteúdo das Sub-Abas */}
@@ -487,6 +513,45 @@ export default function DashboardNutri() {
                             <div className="flex justify-end">
                               <button onClick={salvarDetalhesCliente} disabled={savingAnamnese} className="bg-purple-600 text-white px-6 py-2 rounded-xl font-bold flex items-center gap-2 hover:bg-purple-700 transition-colors disabled:opacity-50">
                                 {savingAnamnese ? <Loader2 className="w-4 h-4 animate-spin"/> : <Save className="w-4 h-4"/>} Salvar Regras de IA
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {clientTab === "chat" && (
+                          <div className="flex flex-col h-[500px] border border-slate-200 rounded-xl overflow-hidden">
+                            <div className="bg-slate-50 p-4 border-b border-slate-200">
+                              <h4 className="font-bold text-slate-800">Histórico de Conversas e Intervenção</h4>
+                              <p className="text-sm text-slate-500">Acompanhe o que o cliente conversa com a IA e envie mensagens diretas (que aparecerão como o bot).</p>
+                            </div>
+                            <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-white">
+                              {chatHistorico.map((msg, i) => (
+                                <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                                  <div className={`max-w-[70%] rounded-2xl p-4 shadow-sm ${msg.role === 'user' ? 'bg-emerald-600 text-white rounded-br-none' : 'bg-slate-100 text-slate-800 rounded-bl-none'}`}>
+                                    <div dangerouslySetInnerHTML={{ __html: msg.texto.replace(/\n/g, '<br/>') }} />
+                                    <span className={`text-[10px] opacity-70 mt-2 block ${msg.role === 'user' ? 'text-emerald-100' : 'text-slate-500'}`}>
+                                      {new Date(msg.time).toLocaleString('pt-BR')}
+                                    </span>
+                                  </div>
+                                </div>
+                              ))}
+                              {chatHistorico.length === 0 && <p className="text-center text-slate-400 mt-10">Nenhuma conversa registrada ainda.</p>}
+                            </div>
+                            <div className="p-4 bg-white border-t border-slate-200 flex gap-2">
+                              <input 
+                                type="text" 
+                                value={nutriMensagem}
+                                onChange={e => setNutriMensagem(e.target.value)}
+                                placeholder="Digite uma mensagem para intervir..." 
+                                className="flex-1 p-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none"
+                                onKeyDown={e => e.key === 'Enter' && enviarMensagemNutri()}
+                              />
+                              <button 
+                                onClick={enviarMensagemNutri} 
+                                disabled={sendingMsg || !nutriMensagem.trim()}
+                                className="bg-blue-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-blue-700 disabled:opacity-50"
+                              >
+                                {sendingMsg ? "Enviando..." : "Enviar"}
                               </button>
                             </div>
                           </div>

@@ -35,14 +35,24 @@ export default function ChatPage() {
     setNutriName(localStorage.getItem("nutri_name") || "Nutricionista");
 
     // Load history
-    fetchHistory(id);
+    fetchHistory(id, true);
+
+    const interval = setInterval(() => {
+      fetchHistory(id, false);
+    }, 3000);
+    return () => clearInterval(interval);
   }, [router]);
 
-  const fetchHistory = async (id: string) => {
+  const fetchHistory = async (id: string, scroll: boolean = false) => {
     try {
       const res = await axios.get(`http://localhost:8000/api/chat/${id}/historico`);
-      setMessages(res.data || []);
-      scrollToBottom();
+      setMessages(prev => {
+        if (prev.length !== res.data.length) {
+          if (scroll) setTimeout(scrollToBottom, 100);
+          return res.data || [];
+        }
+        return prev;
+      });
     } catch (err) {
       console.error("Erro ao carregar histórico", err);
     }

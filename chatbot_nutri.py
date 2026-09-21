@@ -470,6 +470,7 @@ def classificar_imc(imc: Optional[float]) -> str:
 def extrair_itens_e_gramas(frase: str) -> List[Tuple[str, float]]:
     frase = frase.lower()
     resultados = []
+    
     matches = list(ITEM_GRAMA_PAIR_PATTERN.finditer(frase))
     if matches:
         for m in matches:
@@ -478,6 +479,7 @@ def extrair_itens_e_gramas(frase: str) -> List[Tuple[str, float]]:
             grams = float(grams_text.group(1).replace(",", ".")) if grams_text else 100.0
             resultados.append((nome, grams))
         return resultados
+
     tokens = re.split(r' e |,|;|\band\b', frase)
     for t in tokens:
         t = t.strip()
@@ -487,13 +489,18 @@ def extrair_itens_e_gramas(frase: str) -> List[Tuple[str, float]]:
             nome = GRAMAS_PATTERN.sub('', t).strip()
             if nome:
                 resultados.append((nome, grams))
+                
     if not resultados:
-        palavras = re.findall(r'[A-Za-zÀ-ú0-9]+', frase)
-        if 'comi' in frase:
-            idx = palavras.index('comi') if 'comi' in palavras else -1
-            if idx >= 0 and idx + 1 < len(palavras):
-                nome = ' '.join(palavras[idx+1: idx+4])
-                resultados.append((nome, 100.0))
+        # Se não tiver gramas, pega tudo depois dos verbos indicativos
+        m_comi = re.search(r'(?:comi|comeu|comemos|registrei|anote|anota|comendo|comer|almocei|jantei|tomei)\s+(?:um|uma|uns|umas|o|a|os|as)?\s*(.*)', frase)
+        if m_comi:
+            comidas = re.split(r' e |,|;', m_comi.group(1))
+            for c in comidas:
+                c = c.strip(" .;")
+                c = re.sub(r'^(o|a|os|as|de|do|da|no|na)\s+', '', c)
+                if c and not any(verb in c for verb in ["hoje", "ontem", "agora", "almoço", "jantar", "café"]):
+                    resultados.append((c, 100.0))
+                    
     return resultados
 
 async def registrar_consumo(id_cliente: str, refeicao: str, nome_item_usuario: str, gramas: float) -> Dict[str, Any]:
@@ -879,7 +886,21 @@ async def _gerar_contexto_calculado(id_cliente: str, texto: str) -> Tuple[str, b
         resposta = await mostrar_informacoes_cliente(id_cliente)
         return resposta, True
 
-    if "comi" in texto_lower or "comemos" in texto_lower or "comeu" in texto_lower or "registrei" in texto_lower or "anota aí" in texto_lower:
+    # Verifica se está respondendo a uma pergunta sobre gramas
+    ultima = await ultima_resposta_contexto(id_cliente)
+    if ultima and "Quantas gramas ou unidades você comeu" in ultima.get("texto", ""):
+        m_gramas = re.search(r'(\d+(?:[.,]\d+)?)\s*(g|gramas|gr|unidade|unidades)?', texto_lower)
+        if m_gramas:
+            gramas = float(m_gramas.group(1).replace(",", "."))
+            m_alimento = re.search(r"Achei '(.*?)'", ultima.get("texto", ""))
+            if m_alimento:
+                alimento = m_alimento.group(1)
+                registro = await registrar_consumo(id_cliente, "refeicao", alimento, gramas)
+                if registro:
+                    restante = await recomendar_para_restante(id_cliente)
+                    return f"Anotado! ✅ <b>{registro['nome_item']}</b> ({registro['gramas']}g) com ~{registro['kcal']:.0f} kcal.\n\n{restante}", True
+
+    if any(k in texto_lower for k in ["comi", "comemos", "comeu", "registrei", "anota aí", "comer", "almocei", "jantei", "tomei"]):
         refeicao_encontrada = "refeicao" 
         for mk in MEAL_KEYS:
             if mk in texto_lower:
@@ -888,15 +909,22 @@ async def _gerar_contexto_calculado(id_cliente: str, texto: str) -> Tuple[str, b
         
         pares = extrair_itens_e_gramas(texto_lower)
         if not pares:
-            # Aqui o sistema de regras não conseguiu extrair o que foi comido —
-            # deixa a LLM tentar interpretar em vez de devolver mensagem fixa
             return "", False
         else:
             mensagens = []
             for nome_item, gramas in pares:
-                registro = await registrar_consumo(id_cliente, refeicao_encontrada, nome_item, gramas)
-                if registro:
-                    mensagens.append(f"Anotado! ✅ <b>{registro['nome_item']}</b> ({registro['gramas']}g) com ~{registro['kcal']:.0f} kcal.")
+                if gramas == 100.0 and not re.search(r'\d+', texto_lower):
+                    mensagens.append(f"Achei '{nome_item}', mas não vi a quantidade. Quantas gramas ou unidades você comeu?")
+                else:
+                    registro = await registrar_consumo(id_cliente, refeicao_encontrada, nome_item, gramas)
+                    if registro:
+                        mensagens.append(f"Anotado! ✅ <b>{registro['nome_item']}</b> ({registro['gramas']}g) com ~{registro['kcal']:.0f} kcal.")
+            
+            # Se anotou alguma coisa com sucesso (e não apenas perguntou), já avisa como estão as calorias
+            if any("Anotado!" in m for m in mensagens):
+                restante = await recomendar_para_restante(id_cliente)
+                mensagens.append("\n" + restante)
+                
             resposta = "\n".join(mensagens)
         return resposta, True
 
@@ -960,6 +988,20 @@ async def chamar_llm_com_contexto(id_cliente: str, pergunta_usuario: str, respos
     resumo_plano_txt = "\n".join(resumo_plano) if resumo_plano else "Plano ainda não cadastrado."
 
     consumo_hoje, _ = await consumo_total_hoje(id_cliente)
+    
+    # Extrai o prontuário se houver
+    anamnese = cliente.get('anamnese') or {}
+    prontuario_txt = ""
+    if anamnese:
+        doencas = anamnese.get("doencas", "").strip()
+        intolerancias = anamnese.get("intolerancias", "").strip()
+        estilo_vida = anamnese.get("estilo_vida", "").strip()
+        
+        if doencas or intolerancias or estilo_vida:
+            prontuario_txt = "\n\nPRONTUÁRIO DE SAÚDE (USE PARA RECOMENDAÇÕES):"
+            if doencas: prontuario_txt += f"\n- Doenças/Condições: {doencas}"
+            if intolerancias: prontuario_txt += f"\n- Alergias/Intolerâncias: {intolerancias}"
+            if estilo_vida: prontuario_txt += f"\n- Estilo de Vida: {estilo_vida}"
 
     system_prompt = f"""Você é um assistente de nutrição chamado OTRI, integrado ao app de uma nutricionista.
 
@@ -967,7 +1009,7 @@ Persona definida pela nutricionista: {persona}
 Restrições que você DEVE seguir: {restricoes}
 
 Regras gerais:
-- Nunca dê diagnósticos médicos.
+- Nunca dê diagnósticos médicos, mas baseie-se no prontuário do cliente (se houver) para dar dicas seguras.
 - Nunca invente informações do plano do cliente; use só o que está listado abaixo.
 - Se não souber algo, diga que a nutricionista precisa ser consultada.
 - Responda em português, de forma amigável e direta (2-4 frases), no mesmo tom da persona.
@@ -977,6 +1019,7 @@ Regras gerais:
 - O sistema gerou a seguinte "Resposta Base": {resposta_base}
 - Você DEVE usar as informações dessa resposta base como corretas, pois vêm do banco de dados ou das intenções mapeadas.
 - Reescreva a resposta base para deixá-la mais personalizada e amigável para o usuário, no tom da sua persona.
+- IMPORTANTE: Se a resposta base fizer uma PERGUNTA (ex: "Quantas gramas ou unidades você comeu?"), VOCÊ DEVE MANTER ESSA PERGUNTA na sua resposta final.
 - Se a resposta base parecer correta para a pergunta do usuário, apenas melhore a sua apresentação.
 """
     else:
@@ -988,11 +1031,25 @@ Regras gerais:
 Dados do cliente:
 - Nome: {cliente.get('nome')}
 - Meta: {cliente.get('meta') or 'não definida'}
-- Consumo calórico hoje: {consumo_hoje:.0f} kcal
+- Consumo calórico hoje: {consumo_hoje:.0f} kcal{prontuario_txt}
 
 Plano alimentar cadastrado:
 {resumo_plano_txt}
 """
+
+    historico_db = await get_historico_conversa(id_cliente)
+    
+    # Pega as últimas 6 mensagens para contexto, excluindo a atual (que acabou de ser salva)
+    historico_recente = historico_db[-7:-1] if len(historico_db) > 1 else []
+    
+    messages_payload = [{"role": "system", "content": system_prompt}]
+    
+    for msg in historico_recente:
+        # A API da HF espera "assistant" ao invés de "bot"
+        role = "assistant" if msg["role"] == "bot" else "user"
+        messages_payload.append({"role": role, "content": msg["texto"]})
+        
+    messages_payload.append({"role": "user", "content": pergunta_usuario})
 
     try:
         async with httpx.AsyncClient(timeout=20) as client:
@@ -1001,10 +1058,7 @@ Plano alimentar cadastrado:
                 headers={"Authorization": f"Bearer {HF_TOKEN}"},
                 json={
                     "model": HF_MODEL_FALLBACK,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": pergunta_usuario},
-                    ],
+                    "messages": messages_payload,
                     "max_tokens": 300,
                     "temperature": 0.7,
                 },
@@ -1023,8 +1077,11 @@ async def responder_pergunta(id_cliente: str, texto: str) -> str:
 
     resposta_base, entendeu = await _gerar_contexto_calculado(id_cliente, texto)
 
-    # A LLM atuará sempre para personalizar a resposta base ou gerar uma nova se não foi entendida.
-    resposta_final = await chamar_llm_com_contexto(id_cliente, texto, resposta_base if entendeu else "")
+    if entendeu and ("Quantas gramas" in resposta_base or "Anotado! ✅" in resposta_base):
+        resposta_final = resposta_base
+    else:
+        # A LLM atuará sempre para personalizar a resposta base ou gerar uma nova se não foi entendida.
+        resposta_final = await chamar_llm_com_contexto(id_cliente, texto, resposta_base if entendeu else "")
 
     await _salvar_conversa(id_cliente, "bot", resposta_final)
     return resposta_final

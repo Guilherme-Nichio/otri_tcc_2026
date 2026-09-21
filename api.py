@@ -108,6 +108,13 @@ async def post_chat_message(id_cliente: str, message: ChatMessage):
 async def get_chat_historico(id_cliente: str):
     return await bot.get_historico_conversa(id_cliente)
 
+@api_router.post("/chat/{id_cliente}/nutri")
+async def post_chat_nutri(id_cliente: str, message: ChatMessage):
+    if not await bot.get_cliente_por_id(id_cliente):
+        raise HTTPException(status_code=404, detail="Cliente não encontrado")
+    await bot._salvar_conversa(id_cliente, "bot", message.texto)
+    return {"status": "ok"}
+
 @api_router.get("/clientes/{id_cliente}/perfil")
 async def get_perfil_cliente(id_cliente: str):
     perfil = await bot.get_cliente_perfil(id_cliente)

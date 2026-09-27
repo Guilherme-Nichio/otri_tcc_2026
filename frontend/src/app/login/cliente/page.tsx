@@ -20,7 +20,7 @@ export default function LoginClientePage() {
     setError("");
 
     try {
-      const response = await axios.post("http://localhost:8000/api/login/cliente", {
+      const response = await axios.post(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}` + "/api/login/cliente", {
         email,
         senha,
       });

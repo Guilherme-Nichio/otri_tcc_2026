@@ -99,8 +99,8 @@ export default function DashboardNutri() {
     setLoading(true);
     try {
       const [resClientes, resBot] = await Promise.all([
-        axios.get(`http://localhost:8000/api/nutricionistas/${id}/clientes`),
-        axios.get(`http://localhost:8000/api/nutricionistas/${id}/bot-config`).catch(() => ({ data: null }))
+        axios.get(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/nutricionistas/${id}/clientes`),
+        axios.get(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/nutricionistas/${id}/bot-config`).catch(() => ({ data: null }))
       ]);
       setClientes(resClientes.data || []);
       if (resBot.data) {
@@ -122,9 +122,9 @@ export default function DashboardNutri() {
     setClienteSelecionado(null);
     try {
       const [resPerfil, resPlano, resMon] = await Promise.all([
-        axios.get(`http://localhost:8000/api/clientes/${c_short.id_cliente}/perfil`),
-        axios.get(`http://localhost:8000/api/planos/${c_short.id_cliente}`),
-        axios.get(`http://localhost:8000/api/clientes/${c_short.id_cliente}/monitoramento`)
+        axios.get(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/clientes/${c_short.id_cliente}/perfil`),
+        axios.get(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/planos/${c_short.id_cliente}`),
+        axios.get(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/clientes/${c_short.id_cliente}/monitoramento`)
       ]);
       const clienteCompleto = resPerfil.data;
       setClienteSelecionado(clienteCompleto);
@@ -153,7 +153,7 @@ export default function DashboardNutri() {
 
   const fetchChat = async (id: string) => {
     try {
-      const res = await axios.get(`http://localhost:8000/api/chat/${id}/historico`);
+      const res = await axios.get(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/chat/${id}/historico`);
       setChatHistorico(res.data || []);
     } catch (err) {}
   };
@@ -163,7 +163,7 @@ export default function DashboardNutri() {
     setLoadingReport(true);
     setShowReportModal(true);
     try {
-      const res = await axios.get(`http://localhost:8000/api/clientes/${clienteSelecionado.id_cliente}/relatorio-ia`);
+      const res = await axios.get(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/clientes/${clienteSelecionado.id_cliente}/relatorio-ia`);
       setAiReport(res.data.relatorio);
     } catch (err) {
       console.error(err);
@@ -177,7 +177,7 @@ export default function DashboardNutri() {
     if(!nutriMensagem.trim() || !clienteSelecionado) return;
     setSendingMsg(true);
     try {
-      await axios.post(`http://localhost:8000/api/chat/${clienteSelecionado.id_cliente}/nutri`, { texto: nutriMensagem });
+      await axios.post(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/chat/${clienteSelecionado.id_cliente}/nutri`, { texto: nutriMensagem });
       setNutriMensagem("");
       fetchChat(clienteSelecionado.id_cliente);
     } catch (err) {
@@ -191,7 +191,7 @@ export default function DashboardNutri() {
     e.preventDefault();
     setCreatingClient(true);
     try {
-      await axios.post("http://localhost:8000/api/clientes", {
+      await axios.post(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}` + "/api/clientes", {
         id_nutri: nutriId,
         nome: novoCliente.nome,
         email: novoCliente.email,
@@ -217,7 +217,7 @@ export default function DashboardNutri() {
     if(!clienteSelecionado) return;
     setSavingClient(true);
     try {
-      await axios.put(`http://localhost:8000/api/clientes/${clienteSelecionado.id_cliente}/basico`, {
+      await axios.put(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/clientes/${clienteSelecionado.id_cliente}/basico`, {
         nome: editCliente.nome,
         idade: parseInt(editCliente.idade),
         sexo: editCliente.sexo,
@@ -245,7 +245,7 @@ export default function DashboardNutri() {
     if (!clienteSelecionado) return;
     const novoStatus = !clienteSelecionado.ativo;
     try {
-      await axios.put(`http://localhost:8000/api/clientes/${clienteSelecionado.id_cliente}/status`, { ativo: novoStatus });
+      await axios.put(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/clientes/${clienteSelecionado.id_cliente}/status`, { ativo: novoStatus });
       setClienteSelecionado({ ...clienteSelecionado, ativo: novoStatus });
       setClientes(clientes.map(c => c.id_cliente === clienteSelecionado.id_cliente ? { ...c, ativo: novoStatus } : c));
     } catch (err) {
@@ -262,7 +262,7 @@ export default function DashboardNutri() {
         ...anamneseEdit
       };
       
-      await axios.put(`http://localhost:8000/api/clientes/${clienteSelecionado.id_cliente}/detalhes`, {
+      await axios.put(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/clientes/${clienteSelecionado.id_cliente}/detalhes`, {
         anamnese: novaAnamnese,
         ia_persona: iaClientEdit.persona,
         ia_restricoes: iaClientEdit.restricoes
@@ -284,7 +284,7 @@ export default function DashboardNutri() {
   const salvarBotConfig = async () => {
     setSavingBot(true);
     try {
-      await axios.post(`http://localhost:8000/api/nutricionistas/${nutriId}/bot-config`, {
+      await axios.post(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/nutricionistas/${nutriId}/bot-config`, {
         persona: botConfig.persona,
         restricoes: botConfig.restricoes,
         cor: botConfig.cor
@@ -302,7 +302,7 @@ export default function DashboardNutri() {
     if (!clienteSelecionado) return;
     setAddingItem(true);
     try {
-      await axios.post(`http://localhost:8000/api/planos/${clienteSelecionado.id_cliente}`, {
+      await axios.post(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/planos/${clienteSelecionado.id_cliente}`, {
         refeicao: novoItem.refeicao,
         nome_alimento: novoItem.nome_alimento,
         cal_100g: parseFloat(novoItem.cal_100g),
@@ -310,7 +310,7 @@ export default function DashboardNutri() {
         carb_100g: parseFloat(novoItem.carb_100g) || 0,
         fat_100g: parseFloat(novoItem.fat_100g) || 0,
       });
-      const res = await axios.get(`http://localhost:8000/api/planos/${clienteSelecionado.id_cliente}`);
+      const res = await axios.get(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/planos/${clienteSelecionado.id_cliente}`);
       setPlanoAtual(res.data);
       setNovoItem({ ...novoItem, nome_alimento: "", cal_100g: "", prot_100g: "", carb_100g: "", fat_100g: "" });
     } catch (err) {

@@ -45,7 +45,7 @@ export default function ChatPage() {
 
   const fetchHistory = async (id: string, scroll: boolean = false) => {
     try {
-      const res = await axios.get(`http://localhost:8000/api/chat/${id}/historico`);
+      const res = await axios.get(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/chat/${id}/historico`);
       setMessages(prev => {
         if (prev.length !== res.data.length) {
           if (scroll) setTimeout(scrollToBottom, 100);
@@ -79,7 +79,7 @@ export default function ChatPage() {
     setLoading(true);
 
     try {
-      const res = await axios.post(`http://localhost:8000/api/chat/${userId}`, { texto: userText });
+      const res = await axios.post(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/chat/${userId}`, { texto: userText });
       
       const newBotMsg: Message = { role: "bot", texto: res.data.resposta, time: new Date().toISOString() };
       setMessages(prev => [...prev, newBotMsg]);

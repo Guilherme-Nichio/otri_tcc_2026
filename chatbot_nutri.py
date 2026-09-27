@@ -10,7 +10,6 @@ from typing import List, Dict, Any, Optional, Tuple
 from supabase import create_async_client, AsyncClient
 from dotenv import load_dotenv
 import httpx  # cliente HTTP assíncrono, já vem com fastapi[standard]
-import numpy as np   # adicionar no topo, junto dos outros imports
 
 
 load_dotenv()
@@ -20,14 +19,7 @@ HF_ROUTER_URL = "https://router.huggingface.co/v1/chat/completions"
 
 
 
-try:
-    from sentence_transformers import SentenceTransformer, util
-except Exception as e:
-    raise RuntimeError("Erro ao importar sentence-transformers. "
-                       "Instale com: pip install sentence-transformers torch numpy") from e
 
-MODELO_EMBEDDING = "paraphrase-multilingual-MiniLM-L12-v2"
-MODELO_IA = None
 DF_ALIMENTOS = None
 INTENCOES_EMBED: Dict[str, Any] = {}
 
@@ -45,15 +37,7 @@ GRAMAS_PATTERN = re.compile(r'(\d+(?:[.,]\d+)?)\s*(g|gramas|grama|gr)\b', re.I)
 ITEM_GRAMA_PAIR_PATTERN = re.compile(r'([A-Za-zÀ-ú0-9\s\-\+]+?)\s*,?\s*(\d+(?:[.,]\d+)?\s*(?:g|gramas|gr)\b)', re.I)
 
 def carregar_modelos():
-    global MODELO_IA, DF_ALIMENTOS, INTENCOES_EMBED
-    
-    if MODELO_IA: 
-        return
-
-    print("Carregando modelo de IA...")
-    MODELO_IA = SentenceTransformer(MODELO_EMBEDDING)
-    print("Modelo de IA carregado.")
-
+    global DF_ALIMENTOS
     print("Carregando base de alimentos...")
     try:
         if os.path.exists("base-comidas-tratada.xlsx - basona.csv"):
@@ -78,7 +62,7 @@ def carregar_modelos():
         with open(CAMINHO_INTENCOES, "r", encoding="utf-8") as f:
             INTENCOES_EXEMPLO = json.load(f)
         
-        INTENCOES_EMBED = {k: MODELO_IA.encode(v, convert_to_tensor=True) for k, v in INTENCOES_EXEMPLO.items()}
+        INTENCOES_EMBED = {}
         print("Intenções carregadas.")
     else:
         print(f"Aviso: Arquivo '{CAMINHO_INTENCOES}' não encontrado. A IA de intenção ficará limitada.")
@@ -464,20 +448,11 @@ async def update_bot_config(id_nutri: str, persona: str, restricoes: str, cor: s
 
 async def adicionar_opcao_plano(id_cliente: str, refeicao: str, nome_alimento: str,
                           cal_100g: float, prot_100g: float=0.0, carb_100g: float=0.0, fat_100g: float=0.0) -> bool:
-    if MODELO_IA is None:
-        print("Modelo de IA não carregado. Não é possível adicionar embedding.")
-        return False
-        
     refeicao_key = refeicao.strip().lower()
     id_item = gerar_id()
     
     texto_repr = f"{nome_alimento} - {cal_100g:.0f} kcal por 100g"
     embedding_vec_list = None
-    try:
-        emb = MODELO_IA.encode(texto_repr, convert_to_tensor=True)
-        embedding_vec_list = emb.cpu().detach().numpy().tolist()
-    except Exception as e:
-        print(f"[AVISO] falha ao gerar embedding para '{nome_alimento}': {e}")
 
     try:
         await supabase.table("planos").insert({
@@ -526,54 +501,7 @@ async def listar_plano(id_cliente: str) -> Dict[str, List[Dict[str,Any]]]:
     return plano_dict
 
 async def _encontrar_item_por_nome_por_embedding(id_cliente: str, texto_item: str, limiar: float=0.55) -> Optional[Tuple[str, Dict[str,Any]]]:
-    if MODELO_IA is None: return None
-
-    try:
-        res = await supabase.table("planos").select("*").eq("id_cliente", id_cliente).execute()
-        itens = res.data
-    except Exception:
-        return None
-
-    if not itens:
-        return None
-
-    emb_texto = MODELO_IA.encode(texto_item, convert_to_tensor=True)
-    melhor_sim = -1.0
-    melhor_match = None
-    
-    for item in itens:
-        vec_data = item.get("embedding_vec")
-        if not vec_data:
-            continue
-            
-        try:
-            if isinstance(vec_data, str):
-                vec_list = json.loads(vec_data)
-            else:
-                vec_list = vec_data
-
-            vec = np.array(vec_list, dtype=np.float32)
-            sim = float(util.cos_sim(emb_texto, vec))
-            
-            if sim > melhor_sim:
-                melhor_sim = sim
-                item_formatado = {
-                    "id": item["id_item"],
-                    "nome": item["nome"],
-                    "per_100g": {
-                        "cal": item["cal_100g"],
-                        "prot": item["prot_100g"],
-                        "carb": item["carb_100g"],
-                        "fat": item["fat_100g"]
-                    },
-                    "_embedding_vec": vec 
-                }
-                melhor_match = (item["refeicao"], item_formatado)
-        except Exception as e:
-            print(f"Erro ao processar embedding do item {item['id_item']}: {e}")
-            
-    if melhor_match and melhor_sim >= limiar:
-        return melhor_match
+    return None
         
     return None
 
@@ -796,16 +724,16 @@ async def recomendar_para_restante(id_cliente: str, margem_kcal: float = 0.0) ->
     return resposta
 
 def interpretar_intencao(pergunta: str) -> Tuple[Optional[str], float]:
-    if MODELO_IA is None: return None, 0.0
-    
-    emb = MODELO_IA.encode(pergunta, convert_to_tensor=True)
     melhor = None
-    melhor_sim = -1.0
-    for chave, embs in INTENCOES_EMBED.items():
-        sim = float(util.cos_sim(emb, embs).max())
-        if sim > melhor_sim:
-            melhor_sim = sim
-            melhor = chave
+    melhor_sim = 0.0
+    for chave, exemplos in INTENCOES_EXEMPLO.items():
+        res = process.extractOne(pergunta, exemplos)
+        if res:
+            match_str, score, idx = res
+            sim = score / 100.0
+            if sim > melhor_sim:
+                melhor_sim = sim
+                melhor = chave
     return melhor, melhor_sim
 
 async def ultima_resposta_contexto(id_cliente: str) -> Optional[Dict[str,Any]]:

@@ -77,6 +77,7 @@ export const MEAL_TYPES = [
 
 interface PlanoAlimentarFormProps {
   initialPaciente?: string;
+  initialData?: any;
   onSavePayload?: (payload: any) => Promise<void> | void;
   readOnlyPacienteField?: boolean;
 }
@@ -98,6 +99,7 @@ function novaRefeicao(tipo?: string): RefeicaoPlan {
 
 export default function PlanoAlimentarForm({
   initialPaciente = "",
+  initialData = null,
   onSavePayload,
   readOnlyPacienteField = false,
 }: PlanoAlimentarFormProps) {
@@ -106,9 +108,7 @@ export default function PlanoAlimentarForm({
   const [refeicoes, setRefeicoes] = useState<RefeicaoPlan[]>([novaRefeicao("cafe_da_manha")]);
 
   const [banner, setBanner] = useState<{ msg: string; type: "error" | "success" } | null>(null);
-  const [showModal, setShowModal] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const [jsonText, setJsonText] = useState("");
+
 
   // Auto-complete focus/active tracking
   const [activeInputId, setActiveInputId] = useState<string | null>(null);
@@ -118,6 +118,31 @@ export default function PlanoAlimentarForm({
   useEffect(() => {
     if (initialPaciente) setPaciente(initialPaciente);
   }, [initialPaciente]);
+
+  useEffect(() => {
+    if (initialData) {
+      if (initialData.observacoesGerais) setObservacoes(initialData.observacoesGerais);
+      if (initialData.refeicoes && initialData.refeicoes.length > 0) {
+        const loaded = initialData.refeicoes.map((r: any) => ({
+          id: uid(),
+          tipo: r.tipo,
+          horario: r.horario || "",
+          opcoes: r.opcoes.map((o: any) => ({
+            id: uid(),
+            alimentos: o.alimentos.map((a: any) => ({
+              id: uid(),
+              quantidade: a.quantidade,
+              unidade: a.unidade,
+              nome: a.nome,
+              alimentoId: a.alimentoId,
+              daTabela: a.origem === 'tabela_alimentos'
+            }))
+          }))
+        }));
+        setRefeicoes(loaded);
+      }
+    }
+  }, [initialData]);
 
   const mealLabel = (tipo: string) => {
     return MEAL_TYPES.find((t) => t.value === tipo)?.label || tipo;
@@ -279,18 +304,6 @@ export default function PlanoAlimentarForm({
     };
   };
 
-  const handlePreview = () => {
-    const erro = validar();
-    if (erro) {
-      setBanner({ msg: erro, type: "error" });
-      return;
-    }
-    setBanner(null);
-    const payload = montarPayload();
-    setJsonText(JSON.stringify(payload, null, 2));
-    setShowModal(true);
-  };
-
   const handleSave = async () => {
     const erro = validar();
     if (erro) {
@@ -298,59 +311,71 @@ export default function PlanoAlimentarForm({
       return;
     }
     const payload = montarPayload();
-    setBanner({ msg: "Plano alimentar gerado com sucesso!", type: "success" });
+    
     if (onSavePayload) {
-      await onSavePayload(payload);
-    }
-    setJsonText(JSON.stringify(payload, null, 2));
-    setShowModal(true);
-  };
-
-  const copyToClipboard = async () => {
-    try {
-      await navigator.clipboard.writeText(jsonText);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch (err) {
-      alert("Não foi possível copiar o texto automaticamente.");
+      try {
+        await onSavePayload(payload);
+        setBanner({ msg: "Plano alimentar salvo com sucesso!", type: "success" });
+      } catch (err) {
+        setBanner({ msg: "Erro ao salvar o plano no servidor.", type: "error" });
+      }
+    } else {
+      setBanner({ msg: "Plano alimentar gerado com sucesso!", type: "success" });
     }
   };
 
   return (
     <div className="page-plano">
-      {/* Topbar */}
-      <div className="topbar-plano">
-        <div className="topbar__row">
-          <div className="topbar__title-group">
-            <h1>Plano Alimentar</h1>
-            <p>Monte refeições com uma ou mais opções, cada uma com seus próprios alimentos.</p>
+      {/* Topbar (só mostra se não estiver readonly / dentro do dashboard do paciente) */}
+      {!readOnlyPacienteField && (
+        <div className="topbar-plano mb-6">
+          <div className="topbar__row">
+            <div className="topbar__title-group">
+              <h1 className="text-2xl font-bold text-slate-800">Plano Alimentar</h1>
+              <p className="text-slate-500">Monte refeições com uma ou mais opções, cada uma com seus próprios alimentos.</p>
+            </div>
+          </div>
+          <hr className="topbar__rule" />
+          <div className="patient-grid">
+            <div className="field">
+              <label htmlFor="pacienteInput">Paciente</label>
+              <input
+                type="text"
+                id="pacienteInput"
+                placeholder="Nome do paciente"
+                value={paciente}
+                onChange={(e) => setPaciente(e.target.value)}
+                readOnly={readOnlyPacienteField}
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="observacoesInput">Observações gerais (opcional)</label>
+              <input
+                type="text"
+                id="observacoesInput"
+                placeholder="Ex: evitar frituras, beber 2L de água por dia..."
+                value={observacoes}
+                onChange={(e) => setObservacoes(e.target.value)}
+              />
+            </div>
           </div>
         </div>
-        <hr className="topbar__rule" />
-        <div className="patient-grid">
-          <div className="field">
-            <label htmlFor="pacienteInput">Paciente</label>
-            <input
-              type="text"
-              id="pacienteInput"
-              placeholder="Nome do paciente"
-              value={paciente}
-              onChange={(e) => setPaciente(e.target.value)}
-              readOnly={readOnlyPacienteField}
-            />
-          </div>
-          <div className="field">
-            <label htmlFor="observacoesInput">Observações gerais (opcional)</label>
-            <input
-              type="text"
-              id="observacoesInput"
-              placeholder="Ex: evitar frituras, beber 2L de água por dia..."
-              value={observacoes}
-              onChange={(e) => setObservacoes(e.target.value)}
-            />
-          </div>
+      )}
+
+      {/* Se estiver no dashboard, mostrar apenas o campo de observações de forma mais limpa */}
+      {readOnlyPacienteField && (
+        <div className="bg-slate-50 p-5 rounded-2xl border border-slate-100 mb-6">
+          <label htmlFor="observacoesInput" className="block text-sm font-bold text-slate-700 mb-2">Observações gerais (Opcional)</label>
+          <input
+            type="text"
+            id="observacoesInput"
+            className="w-full p-3 rounded-xl border border-slate-200 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 outline-none transition-all"
+            placeholder="Ex: evitar frituras, beber 2L de água por dia..."
+            value={observacoes}
+            onChange={(e) => setObservacoes(e.target.value)}
+          />
         </div>
-      </div>
+      )}
 
       {/* Banner */}
       {banner && (
@@ -553,40 +578,16 @@ export default function PlanoAlimentarForm({
         ))}
       </div>
 
-      <button className="add-meal-btn" type="button" onClick={addRefeicao}>
-        + Adicionar refeição
+      <button className="add-meal-btn w-full py-4 border-2 border-dashed border-emerald-200 text-emerald-600 font-bold rounded-2xl hover:bg-emerald-50 transition-colors mt-4" type="button" onClick={addRefeicao}>
+        + Adicionar nova refeição
       </button>
 
-      <div className="footer-actions">
-        <button className="btn-plano btn-plano-secondary" type="button" onClick={handlePreview}>
-          Ver JSON gerado
-        </button>
-        <button className="btn-plano btn-plano-primary" type="button" onClick={handleSave}>
-          Salvar plano alimentar
+      <div className="footer-actions mt-8 flex justify-end gap-4">
+        <button className="btn-plano btn-plano-primary bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 px-6 rounded-xl transition-colors shadow-sm" type="button" onClick={handleSave}>
+          Salvar Plano Alimentar
         </button>
       </div>
 
-      {/* Modal JSON */}
-      {showModal && (
-        <div className="modal-overlay-plano show" onClick={(e) => e.target === e.currentTarget && setShowModal(false)}>
-          <div className="modal-plano">
-            <div className="modal-plano__head">
-              <h3>Payload que seria enviado ao backend</h3>
-              <button onClick={() => setShowModal(false)} aria-label="Fechar">
-                ✕
-              </button>
-            </div>
-            <div className="modal-plano__body">
-              <pre className="mono">{jsonText}</pre>
-            </div>
-            <div className="modal-plano__foot">
-              <button className="btn-plano btn-plano-secondary" type="button" onClick={copyToClipboard}>
-                {copied ? "Copiado!" : "Copiar JSON"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

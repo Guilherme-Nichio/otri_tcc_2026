@@ -182,6 +182,19 @@ async def atualizar_detalhes_cliente(id_cliente: str, anamnese: Dict[str, Any], 
         print(f"Erro ao atualizar detalhes do cliente: {e}")
         return False
 
+async def salvar_plano_completo(id_cliente: str, plano_json: Dict[str, Any]) -> bool:
+    cliente = await get_cliente_por_id(id_cliente)
+    if not cliente:
+        return False
+    anamnese = cliente.get("anamnese") or {}
+    anamnese["plano_alimentar"] = plano_json
+    try:
+        await supabase.table("clientes").update({"anamnese": anamnese}).eq("id_cliente", id_cliente).execute()
+        return True
+    except Exception as e:
+        print(f"Erro ao salvar plano completo: {e}")
+        return False
+
 async def garantir_usuarios_teste():
     if not supabase:
         return
@@ -1006,15 +1019,6 @@ async def _gerar_contexto_calculado(id_cliente: str, texto: str) -> Tuple[str, b
     if chave_intencao == "saudacoes" and sim > 0.5:
         resposta = await saudacoes_cliente(id_cliente)
         return resposta, True
-    if chave_intencao == "perguntar_opcoes_cafe" and sim > 0.5:
-        resposta = await recomendar_opcoes_refeicao(id_cliente, "cafe da manha")
-        return resposta, True
-    if chave_intencao == "perguntar_opcoes_almoco" and sim > 0.5:
-        resposta = await recomendar_opcoes_refeicao(id_cliente, "almoco")
-        return resposta, True
-    if chave_intencao == "perguntar_opcoes_janta" and sim > 0.5:
-        resposta = await recomendar_opcoes_refeicao(id_cliente, "janta")
-        return resposta, True
     if chave_intencao == "calorias_disponiveis" and sim > 0.5:
         resposta = await recomendar_para_restante(id_cliente)
         return resposta, True
@@ -1022,9 +1026,12 @@ async def _gerar_contexto_calculado(id_cliente: str, texto: str) -> Tuple[str, b
         resposta = await mostrar_informacoes_cliente(id_cliente)
         return resposta, True
 
-    # Verifica se está respondendo a uma pergunta sobre gramas
+    # Verifica se está respondendo a uma pergunta sobre quantidade
     ultima = await ultima_resposta_contexto(id_cliente)
-    if ultima and "Quantas gramas ou unidades você comeu" in ultima.get("texto", ""):
+    
+    # Se a última resposta tinha as palavras-chave e o usuário mandou um número:
+    is_asking_quantity = ultima and any(w in ultima.get("texto", "").lower() for w in ["gramas", "quantidade", "quantas", "unidades"])
+    if is_asking_quantity:
         m_gramas = re.search(r'(\d+(?:[.,]\d+)?)\s*(g|gramas|gr|unidade|unidades)?', texto_lower)
         if m_gramas:
             gramas = float(m_gramas.group(1).replace(",", "."))
@@ -1050,7 +1057,7 @@ async def _gerar_contexto_calculado(id_cliente: str, texto: str) -> Tuple[str, b
             mensagens = []
             for nome_item, gramas in pares:
                 if gramas == 100.0 and not re.search(r'\d+', texto_lower):
-                    mensagens.append(f"Achei '{nome_item}', mas não vi a quantidade. Quantas gramas ou unidades você comeu?")
+                    mensagens.append(f"[SISTEMA] Achei '{nome_item}', mas não vi a quantidade. Quantas gramas ou unidades você comeu?")
                 else:
                     registro = await registrar_consumo(id_cliente, refeicao_encontrada, nome_item, gramas)
                     if registro:
@@ -1093,8 +1100,11 @@ async def chamar_llm_com_contexto(id_cliente: str, pergunta_usuario: str, respos
     """
     if not HF_TOKEN:
         if resposta_base:
-            return resposta_base
+            return resposta_base.replace("[SISTEMA] ", "")
         return "Desculpe, não consegui entender sua pergunta. 😅 Tente reformular ou fale com sua nutricionista."
+
+    if resposta_base and "[SISTEMA]" in resposta_base:
+        return resposta_base.replace("[SISTEMA] ", "")
 
     cliente = await get_cliente_por_id(id_cliente)
     if not cliente:
@@ -1116,17 +1126,26 @@ async def chamar_llm_com_contexto(id_cliente: str, pergunta_usuario: str, respos
     if cliente.get("ia_restricoes"):
         restricoes += "\n\nRESTRIÇÕES ESPECÍFICAS DESTE PACIENTE:\n" + cliente["ia_restricoes"]
 
-    plano = await listar_plano(id_cliente)
-    resumo_plano = [
-        f"{refeicao}: " + ", ".join(it["nome"] for it in itens)
-        for refeicao, itens in plano.items()
-    ]
-    resumo_plano_txt = "\n".join(resumo_plano) if resumo_plano else "Plano ainda não cadastrado."
+    import datetime
+    import json
+    agora = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
 
-    consumo_hoje, _ = await consumo_total_hoje(id_cliente)
-    
-    # Extrai o prontuário se houver
     anamnese = cliente.get('anamnese') or {}
+    plano_alimentar = anamnese.get("plano_alimentar", {})
+    
+    if plano_alimentar:
+        resumo_plano_txt = json.dumps(plano_alimentar.get("refeicoes", []), indent=2, ensure_ascii=False)
+    else:
+        plano = await listar_plano(id_cliente)
+        resumo_plano = [
+            f"{refeicao}: " + ", ".join(it["nome"] for it in itens)
+            for refeicao, itens in plano.items()
+        ]
+        resumo_plano_txt = "\n".join(resumo_plano) if resumo_plano else "Plano ainda não cadastrado."
+
+    consumo_hoje, lista_consumo = await consumo_total_hoje(id_cliente)
+    consumo_txt = "\n".join([f"- {it['refeicao']}: {it['descricao']} -> {it.get('kcal',0):.0f} kcal" for it in lista_consumo]) if lista_consumo else "Nenhum consumo registrado hoje."
+
     prontuario_txt = ""
     if anamnese:
         doencas = anamnese.get("doencas", "").strip()
@@ -1164,10 +1183,15 @@ Regras gerais:
 """
 
     system_prompt += f"""
+Data e hora atual (use para saber se é manhã, tarde, noite): {agora}
+
 Dados do cliente:
 - Nome: {cliente.get('nome')}
 - Meta: {cliente.get('meta') or 'não definida'}
 - Consumo calórico hoje: {consumo_hoje:.0f} kcal{prontuario_txt}
+
+Histórico detalhado do que o cliente já comeu hoje:
+{consumo_txt}
 
 Plano alimentar cadastrado:
 {resumo_plano_txt}

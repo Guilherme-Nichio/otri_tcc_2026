@@ -6,7 +6,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { 
   Stethoscope, LogOut, Users, Settings, Activity, UserCircle, 
   Plus, Search, ChevronRight, X, Loader2, Save, BrainCircuit, Apple, 
-  FileText, ShieldAlert, CheckCircle2, Clock
+  FileText, ShieldAlert, CheckCircle2, Clock, Target, TrendingUp, Sparkles, Droplets
 } from "lucide-react";
 import axios from "axios";
 import PlanoAlimentarForm from "./PlanoAlimentarForm";
@@ -67,10 +67,21 @@ export default function DashboardNutri() {
   const [novoCliente, setNovoCliente] = useState({ nome: "", email: "", senha: "", idade: "", sexo: "F", peso: "", altura: "" });
   const [creatingClient, setCreatingClient] = useState(false);
   const [showNewClientModal, setShowNewClientModal] = useState(false);
+  
+  const [showEditClientModal, setShowEditClientModal] = useState(false);
+  const [editCliente, setEditCliente] = useState({ nome: "", idade: "", sexo: "F", peso_kg: "", altura_cm: "" });
+  const [savingClient, setSavingClient] = useState(false);
 
   const [savingAnamnese, setSavingAnamnese] = useState(false);
-  const [anamneseEdit, setAnamneseEdit] = useState({ doencas: "", intolerancias: "", estilo_vida: "", observacoes: "" });
+  const [anamneseEdit, setAnamneseEdit] = useState({ 
+    doencas: "", intolerancias: "", estilo_vida: "", observacoes: "", 
+    peso_alvo: "", objetivo: "", agua_meta: "" 
+  });
   const [iaClientEdit, setIaClientEdit] = useState({ persona: "", restricoes: "" });
+  
+  const [aiReport, setAiReport] = useState<string | null>(null);
+  const [loadingReport, setLoadingReport] = useState(false);
+  const [showReportModal, setShowReportModal] = useState(false);
 
   useEffect(() => {
     const id = localStorage.getItem("nutri_id");
@@ -125,7 +136,10 @@ export default function DashboardNutri() {
         doencas: anam.doencas || "",
         intolerancias: anam.intolerancias || "",
         estilo_vida: anam.estilo_vida || "",
-        observacoes: anam.observacoes || ""
+        observacoes: anam.observacoes || "",
+        peso_alvo: anam.peso_alvo || "",
+        objetivo: anam.objetivo || "",
+        agua_meta: anam.agua_meta || ""
       });
       setIaClientEdit({
         persona: clienteCompleto.ia_persona || "",
@@ -142,6 +156,21 @@ export default function DashboardNutri() {
       const res = await axios.get(`http://localhost:8000/api/chat/${id}/historico`);
       setChatHistorico(res.data || []);
     } catch (err) {}
+  };
+
+  const gerarRelatorioIA = async () => {
+    if (!clienteSelecionado) return;
+    setLoadingReport(true);
+    setShowReportModal(true);
+    try {
+      const res = await axios.get(`http://localhost:8000/api/clientes/${clienteSelecionado.id_cliente}/relatorio-ia`);
+      setAiReport(res.data.relatorio);
+    } catch (err) {
+      console.error(err);
+      setAiReport("Erro ao gerar relatório. Tente novamente mais tarde.");
+    } finally {
+      setLoadingReport(false);
+    }
   };
 
   const enviarMensagemNutri = async () => {
@@ -183,6 +212,35 @@ export default function DashboardNutri() {
     }
   };
 
+  const atualizarPacienteBasico = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if(!clienteSelecionado) return;
+    setSavingClient(true);
+    try {
+      await axios.put(`http://localhost:8000/api/clientes/${clienteSelecionado.id_cliente}/basico`, {
+        nome: editCliente.nome,
+        idade: parseInt(editCliente.idade),
+        sexo: editCliente.sexo,
+        peso_kg: parseFloat(editCliente.peso_kg),
+        altura_cm: parseFloat(editCliente.altura_cm)
+      });
+      setShowEditClientModal(false);
+      
+      // Update local state so it reflects immediately
+      setClienteSelecionado({
+        ...clienteSelecionado,
+        nome: editCliente.nome,
+        peso_kg: parseFloat(editCliente.peso_kg),
+        altura_cm: parseFloat(editCliente.altura_cm)
+      });
+      fetchData(nutriId);
+    } catch (err) {
+      alert("Erro ao atualizar paciente.");
+    } finally {
+      setSavingClient(false);
+    }
+  };
+
   const toggleStatusCliente = async () => {
     if (!clienteSelecionado) return;
     const novoStatus = !clienteSelecionado.ativo;
@@ -199,14 +257,19 @@ export default function DashboardNutri() {
     if (!clienteSelecionado) return;
     setSavingAnamnese(true);
     try {
+      const novaAnamnese = {
+        ...clienteSelecionado.anamnese,
+        ...anamneseEdit
+      };
+      
       await axios.put(`http://localhost:8000/api/clientes/${clienteSelecionado.id_cliente}/detalhes`, {
-        anamnese: anamneseEdit,
+        anamnese: novaAnamnese,
         ia_persona: iaClientEdit.persona,
         ia_restricoes: iaClientEdit.restricoes
       });
       setClienteSelecionado({
         ...clienteSelecionado, 
-        anamnese: anamneseEdit, 
+        anamnese: novaAnamnese, 
         ia_persona: iaClientEdit.persona, 
         ia_restricoes: iaClientEdit.restricoes 
       });
@@ -410,12 +473,29 @@ export default function DashboardNutri() {
                             {clienteSelecionado.idade} anos • {clienteSelecionado.sexo} • {clienteSelecionado.peso_kg} kg • {clienteSelecionado.altura_cm} cm
                           </div>
                         </div>
-                        <button 
-                          onClick={toggleStatusCliente}
-                          className={`px-4 py-2 rounded-xl text-sm font-bold transition-colors ${clienteSelecionado.ativo ? 'bg-red-50 text-red-600 hover:bg-red-100' : 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100'}`}
-                        >
-                          {clienteSelecionado.ativo ? "Bloquear Acesso" : "Desbloquear Acesso"}
-                        </button>
+                        <div className="flex items-center gap-3">
+                          <button
+                            onClick={() => {
+                              setEditCliente({
+                                nome: clienteSelecionado.nome,
+                                idade: clienteSelecionado.idade?.toString() || "",
+                                sexo: clienteSelecionado.sexo || "F",
+                                peso_kg: clienteSelecionado.peso_kg?.toString() || "",
+                                altura_cm: clienteSelecionado.altura_cm?.toString() || ""
+                              });
+                              setShowEditClientModal(true);
+                            }}
+                            className="px-4 py-2 rounded-xl text-sm font-bold bg-slate-200 text-slate-700 hover:bg-slate-300 transition-colors flex items-center gap-2"
+                          >
+                            <Settings className="w-4 h-4"/> Editar Dados
+                          </button>
+                          <button 
+                            onClick={toggleStatusCliente}
+                            className={`px-4 py-2 rounded-xl text-sm font-bold transition-colors ${clienteSelecionado.ativo ? 'bg-red-50 text-red-600 hover:bg-red-100' : 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100'}`}
+                          >
+                            {clienteSelecionado.ativo ? "Bloquear Acesso" : "Desbloquear Acesso"}
+                          </button>
+                        </div>
                       </div>
 
                       {/* Navegação Sub-Abas */}
@@ -433,25 +513,77 @@ export default function DashboardNutri() {
                         {/* OVERVIEW */}
                         {clientTab === "overview" && (
                           <div className="space-y-6">
+                            
+                            <div className="flex items-center justify-between">
+                              <h3 className="text-lg font-bold text-slate-800">Evolução e Metas</h3>
+                              <button onClick={gerarRelatorioIA} className="bg-purple-100 hover:bg-purple-200 text-purple-700 font-bold px-4 py-2 rounded-xl flex items-center gap-2 transition-colors text-sm">
+                                <Sparkles className="w-4 h-4" /> Sintetizar Semana com IA
+                              </button>
+                            </div>
+
                             <div className="grid grid-cols-2 gap-4">
-                              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
-                                <div className="flex items-center gap-2 text-slate-500 mb-1"><Clock className="w-4 h-4"/> Último Login/Chat</div>
-                                <div className="font-bold text-slate-800">
-                                  {monitoramento.ultima_mensagem ? new Date(monitoramento.ultima_mensagem).toLocaleString() : "Nunca acessou"}
+                              <div className="bg-slate-50 p-5 rounded-2xl border border-slate-100">
+                                <div className="flex items-center gap-2 text-slate-500 mb-2"><TrendingUp className="w-4 h-4"/> Peso Atual vs Alvo</div>
+                                <div className="flex items-end gap-3 mb-2">
+                                  <div className="text-3xl font-black text-emerald-600">{clienteSelecionado.peso_kg}<span className="text-base font-medium text-emerald-400">kg</span></div>
+                                  <div className="text-slate-400 font-medium mb-1">/ {anamneseEdit.peso_alvo || "--"} kg alvo</div>
+                                </div>
+                                <div className="w-full bg-slate-200 rounded-full h-2.5">
+                                  {anamneseEdit.peso_alvo && clienteSelecionado.peso_kg ? (
+                                    <div className="bg-emerald-500 h-2.5 rounded-full" style={{ width: `${Math.min(100, (clienteSelecionado.peso_kg / Number(anamneseEdit.peso_alvo)) * 100)}%` }}></div>
+                                  ) : (
+                                    <div className="bg-emerald-500 h-2.5 rounded-full w-0"></div>
+                                  )}
                                 </div>
                               </div>
-                              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
-                                <div className="flex items-center gap-2 text-slate-500 mb-1"><Activity className="w-4 h-4"/> Última Refeição Registrada</div>
-                                <div className="font-bold text-slate-800">
-                                  {monitoramento.ultimo_registro ? new Date(monitoramento.ultimo_registro).toLocaleString() : "Sem registros"}
+                              
+                              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 space-y-4">
+                                <div>
+                                  <div className="flex items-center gap-2 text-slate-500 mb-1"><Clock className="w-4 h-4"/> Último Acesso (Chat)</div>
+                                  <div className="font-bold text-slate-800">
+                                    {monitoramento.ultima_mensagem ? new Date(monitoramento.ultima_mensagem).toLocaleString() : "Nunca acessou"}
+                                  </div>
+                                </div>
+                                <div className="pt-2 border-t border-slate-200">
+                                  <div className="flex items-center gap-2 text-slate-500 mb-1"><Activity className="w-4 h-4"/> Último Registro Consumo</div>
+                                  <div className="font-bold text-slate-800">
+                                    {monitoramento.ultimo_registro ? new Date(monitoramento.ultimo_registro).toLocaleString() : "Sem registros"}
+                                  </div>
                                 </div>
                               </div>
                             </div>
                             
-                            <div className="bg-blue-50 p-5 rounded-2xl border border-blue-100">
-                              <h3 className="font-bold text-blue-900 mb-2">Meta Principal</h3>
-                              <p className="text-blue-800">{clienteSelecionado.meta || "Nenhuma meta definida pelo paciente ainda."}</p>
+                            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+                              <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2"><Target className="w-5 h-5 text-emerald-500"/> Definir Metas Clínicas</h3>
+                              
+                              <div className="grid grid-cols-3 gap-4 mb-4">
+                                <div>
+                                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Objetivo Principal</label>
+                                  <select value={anamneseEdit.objetivo} onChange={e => setAnamneseEdit({...anamneseEdit, objetivo: e.target.value})} className="w-full p-2.5 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white outline-none text-sm">
+                                    <option value="">Selecione...</option>
+                                    <option value="Emagrecimento">Emagrecimento</option>
+                                    <option value="Hipertrofia">Hipertrofia</option>
+                                    <option value="Manutenção">Manutenção de Peso</option>
+                                    <option value="Reeducação">Reeducação Alimentar</option>
+                                  </select>
+                                </div>
+                                <div>
+                                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Peso Alvo (kg)</label>
+                                  <input type="number" step="0.1" value={anamneseEdit.peso_alvo} onChange={e => setAnamneseEdit({...anamneseEdit, peso_alvo: e.target.value})} className="w-full p-2.5 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white outline-none text-sm" placeholder="Ex: 65.0"/>
+                                </div>
+                                <div>
+                                  <label className="block text-xs font-bold text-slate-500 uppercase mb-1 flex items-center gap-1"><Droplets className="w-3 h-3 text-blue-400"/> Meta Água (ml/dia)</label>
+                                  <input type="number" step="100" value={anamneseEdit.agua_meta} onChange={e => setAnamneseEdit({...anamneseEdit, agua_meta: e.target.value})} className="w-full p-2.5 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white outline-none text-sm" placeholder="Ex: 2500"/>
+                                </div>
+                              </div>
+                              
+                              <div className="flex justify-end">
+                                <button onClick={salvarDetalhesCliente} disabled={savingAnamnese} className="bg-emerald-600 text-white px-5 py-2 rounded-xl text-sm font-bold flex items-center gap-2 hover:bg-emerald-700 transition-colors disabled:opacity-50">
+                                  {savingAnamnese ? <Loader2 className="w-4 h-4 animate-spin"/> : <Save className="w-4 h-4"/>} Salvar Metas
+                                </button>
+                              </div>
                             </div>
+
                           </div>
                         )}
 
@@ -483,9 +615,26 @@ export default function DashboardNutri() {
                           <div className="space-y-4">
                             <PlanoAlimentarForm
                               initialPaciente={clienteSelecionado.nome}
+                              initialData={clienteSelecionado.anamnese?.plano_alimentar || null}
                               readOnlyPacienteField={true}
                               onSavePayload={async (payload) => {
-                                console.log("Salvando plano para o cliente", clienteSelecionado.id_cliente, payload);
+                                try {
+                                  const res = await fetch(`http://127.0.0.1:8000/api/planos/${clienteSelecionado.id_cliente}/completo`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify(payload)
+                                  });
+                                  if (!res.ok) throw new Error("Erro ao salvar plano");
+                                  
+                                  // Atualiza o estado local para não perder o plano ao trocar de abas
+                                  const novaAnamnese = { ...clienteSelecionado.anamnese, plano_alimentar: payload };
+                                  setClienteSelecionado({ ...clienteSelecionado, anamnese: novaAnamnese });
+                                  
+                                  alert("Plano salvo com sucesso no banco de dados!");
+                                } catch (e) {
+                                  console.error(e);
+                                  alert("Erro ao salvar plano no servidor.");
+                                }
                               }}
                             />
                           </div>
@@ -630,6 +779,76 @@ export default function DashboardNutri() {
                   {creatingClient ? <Loader2 className="w-5 h-5 animate-spin"/> : "Registrar Paciente"}
                 </button>
               </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Modal Editar Paciente */}
+      <AnimatePresence>
+        {showEditClientModal && (
+          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-white rounded-3xl p-8 max-w-lg w-full shadow-2xl relative">
+              <button onClick={() => setShowEditClientModal(false)} className="absolute top-6 right-6 text-slate-400 hover:text-slate-600"><X className="w-6 h-6"/></button>
+              
+              <h2 className="text-2xl font-bold text-slate-900 mb-6">Editar Paciente</h2>
+              
+              <form onSubmit={atualizarPacienteBasico} className="space-y-4">
+                <input required type="text" placeholder="Nome Completo" value={editCliente.nome} onChange={e => setEditCliente({...editCliente, nome: e.target.value})} className="w-full p-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white outline-none"/>
+                
+                <div className="grid grid-cols-2 gap-4">
+                  <input required type="number" placeholder="Idade" value={editCliente.idade} onChange={e => setEditCliente({...editCliente, idade: e.target.value})} className="p-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white outline-none"/>
+                  <select required value={editCliente.sexo} onChange={e => setEditCliente({...editCliente, sexo: e.target.value})} className="p-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white outline-none">
+                    <option value="F">Feminino</option><option value="M">Masculino</option>
+                  </select>
+                  <input required type="number" step="0.1" placeholder="Peso Atual (kg)" value={editCliente.peso_kg} onChange={e => setEditCliente({...editCliente, peso_kg: e.target.value})} className="p-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white outline-none"/>
+                  <input required type="number" step="1" placeholder="Altura (cm)" value={editCliente.altura_cm} onChange={e => setEditCliente({...editCliente, altura_cm: e.target.value})} className="p-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white outline-none"/>
+                </div>
+
+                <button type="submit" disabled={savingClient} className="w-full bg-slate-800 text-white font-bold py-3 rounded-xl mt-6 flex items-center justify-center hover:bg-slate-900 transition-colors disabled:opacity-50">
+                  {savingClient ? <Loader2 className="w-5 h-5 animate-spin"/> : "Salvar Alterações"}
+                </button>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Modal Relatório IA */}
+      <AnimatePresence>
+        {showReportModal && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[60] flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-white rounded-3xl p-8 max-w-2xl w-full shadow-2xl relative overflow-hidden flex flex-col max-h-[90vh]">
+              <button onClick={() => setShowReportModal(false)} className="absolute top-6 right-6 text-slate-400 hover:text-slate-600 z-10"><X className="w-6 h-6"/></button>
+              
+              <div className="flex items-center gap-3 mb-6 border-b border-slate-100 pb-4">
+                <div className="bg-purple-100 text-purple-600 p-2 rounded-xl">
+                  <Sparkles className="w-6 h-6" />
+                </div>
+                <h2 className="text-2xl font-bold text-slate-800">Síntese Inteligente</h2>
+              </div>
+              
+              <div className="overflow-y-auto flex-1 pr-2">
+                {loadingReport ? (
+                  <div className="flex flex-col items-center justify-center py-20 text-slate-500">
+                    <Loader2 className="w-10 h-10 animate-spin mb-4 text-purple-600" />
+                    <p className="font-medium">A IA está analisando o chat e os registros...</p>
+                    <p className="text-sm mt-2 opacity-70">Isso pode levar alguns segundos.</p>
+                  </div>
+                ) : (
+                  <div className="prose prose-slate prose-p:leading-relaxed max-w-none text-slate-700 whitespace-pre-wrap">
+                    {aiReport}
+                  </div>
+                )}
+              </div>
+              
+              {!loadingReport && (
+                <div className="pt-6 mt-2 border-t border-slate-100 flex justify-end">
+                  <button onClick={() => setShowReportModal(false)} className="bg-slate-100 text-slate-700 font-bold py-2 px-6 rounded-xl hover:bg-slate-200 transition-colors">
+                    Fechar
+                  </button>
+                </div>
+              )}
             </motion.div>
           </div>
         )}

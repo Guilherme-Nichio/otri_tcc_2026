@@ -202,6 +202,13 @@ async def criar_novo_cliente(request: ClienteRequest):
         raise HTTPException(status_code=400, detail="Email de cliente já cadastrado.")
     return {"id_cliente": idc, "nome": request.nome}
 
+@api_router.put("/clientes/{id_cliente}/basico")
+async def atualizar_cliente_basico(id_cliente: str, request: Dict[str, Any]):
+    sucesso = await bot.atualizar_cliente(id_cliente, request)
+    if not sucesso:
+        raise HTTPException(status_code=400, detail="Nenhum campo atualizado ou erro interno")
+    return {"status": "sucesso"}
+
 @api_router.get("/admin/buscar-alimento")
 async def buscar_alimento(q: str):
     if len(q) < 3:
@@ -223,6 +230,20 @@ async def adicionar_item_plano(id_cliente: str, item: OpcaoPlanoRequest):
     if not sucesso:
         raise HTTPException(status_code=400, detail="Falha ao adicionar item. Talvez já exista.")
     return {"status": "sucesso", "id_cliente": id_cliente, "item_nome": item.nome_alimento}
+
+@api_router.get("/clientes/{id_cliente}/relatorio-ia")
+async def gerar_relatorio_ia_cliente(id_cliente: str):
+    relatorio = await bot.gerar_relatorio_completo_cliente(id_cliente)
+    if not relatorio:
+        raise HTTPException(status_code=500, detail="Erro ao gerar relatório com a IA.")
+    return {"relatorio": relatorio}
+
+@api_router.post("/planos/{id_cliente}/completo")
+async def salvar_plano_json(id_cliente: str, request: Dict[str, Any]):
+    sucesso = await bot.salvar_plano_completo(id_cliente, request)
+    if not sucesso:
+        raise HTTPException(status_code=500, detail="Erro ao salvar o plano alimentar.")
+    return {"status": "sucesso", "id_cliente": id_cliente}
 
 app.include_router(api_router, prefix="/api")
 

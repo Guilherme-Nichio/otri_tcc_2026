@@ -1,10 +1,11 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
 fastapi
 uvicorn[standard]
 pandas
 rapidfuzz
 unidecode
 sentence-transformers
-torch
+torch==2.2.0+cpu
 numpy
 openpyxl
 supabase

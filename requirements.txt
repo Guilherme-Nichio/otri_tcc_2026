@@ -4,7 +4,8 @@ uvicorn[standard]
 pandas
 rapidfuzz
 unidecode
-sentence-transformers
+sentence-transformers==2.7.0
+transformers==4.43.3
 torch==2.2.0+cpu
 numpy
 openpyxl

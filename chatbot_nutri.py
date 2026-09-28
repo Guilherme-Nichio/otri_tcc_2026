@@ -133,6 +133,7 @@ async def criar_cliente(id_nutri: str, nome: str, email: str, senha: str, idade:
         return None
 
 async def atualizar_cliente(id_cliente: str, campos: Dict[str, Any]) -> bool:
+    if not supabase: return True
     campos_permitidos = {"nome", "idade", "sexo", "peso_kg", "altura_cm", "atividade", "meta", "agua_meta_ml"}
     dados_atualizar = {k: v for k, v in campos.items() if k in campos_permitidos}
     
@@ -147,6 +148,7 @@ async def atualizar_cliente(id_cliente: str, campos: Dict[str, Any]) -> bool:
         return False
 
 async def atualizar_status_cliente(id_cliente: str, ativo: bool) -> bool:
+    if not supabase: return True
     try:
         await supabase.table("clientes").update({"ativo": ativo}).eq("id_cliente", id_cliente).execute()
         return True
@@ -155,6 +157,7 @@ async def atualizar_status_cliente(id_cliente: str, ativo: bool) -> bool:
         return False
 
 async def atualizar_detalhes_cliente(id_cliente: str, anamnese: Dict[str, Any], ia_persona: str, ia_restricoes: str) -> bool:
+    if not supabase: return True
     try:
         await supabase.table("clientes").update({
             "anamnese": anamnese,
@@ -167,6 +170,7 @@ async def atualizar_detalhes_cliente(id_cliente: str, anamnese: Dict[str, Any], 
         return False
 
 async def salvar_plano_completo(id_cliente: str, plano_json: Dict[str, Any]) -> bool:
+    if not supabase: return True
     cliente = await get_cliente_por_id(id_cliente)
     if not cliente:
         return False

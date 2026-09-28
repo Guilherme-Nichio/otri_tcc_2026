@@ -619,7 +619,7 @@ export default function DashboardNutri() {
                               readOnlyPacienteField={true}
                               onSavePayload={async (payload) => {
                                 try {
-                                  const res = await fetch(`http://127.0.0.1:8000/api/planos/${clienteSelecionado.id_cliente}/completo`, {
+                                  const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/planos/${clienteSelecionado.id_cliente}/completo`, {
                                     method: 'POST',
                                     headers: { 'Content-Type': 'application/json' },
                                     body: JSON.stringify(payload)
